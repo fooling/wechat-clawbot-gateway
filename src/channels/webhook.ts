@@ -34,7 +34,8 @@ export class WebhookChannel implements Channel {
             return;
           }
 
-          const segments = (req.url ?? "").split("/");
+          const url = new URL(req.url ?? "", "http://localhost");
+          const segments = url.pathname.split("/");
           const endpointName = segments[2];
 
           if (this.config.token) {
@@ -51,13 +52,18 @@ export class WebhookChannel implements Channel {
             return;
           }
 
-          let data: Record<string, unknown>;
-          try {
-            const raw = await readBody(req);
-            data = JSON.parse(raw) as Record<string, unknown>;
-          } catch {
-            respond(res, 400, { error: "Invalid JSON" });
-            return;
+          // Merge data from query params + JSON body (query takes precedence)
+          let data: Record<string, unknown> = {};
+          const raw = await readBody(req);
+          if (raw.trim()) {
+            try {
+              data = JSON.parse(raw) as Record<string, unknown>;
+            } catch {
+              // Body is not JSON — ignore, use query params only
+            }
+          }
+          for (const [key, val] of url.searchParams) {
+            data[key] = val;
           }
 
           const rendered = endpoint.template.replace(
