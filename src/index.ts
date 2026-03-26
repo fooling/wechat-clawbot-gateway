@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { WxClient } from "./core/wx-client.js";
 import { Gateway } from "./core/gateway.js";
 import { TuiChannel } from "./channels/tui.js";
@@ -8,8 +9,21 @@ import { OpenClawChannel } from "./channels/openclaw.js";
 import { loadConfig } from "./config.js";
 import type { LogEntry, DebugEntry } from "./channels/channel.js";
 
+const CONFIG_PATHS = [
+  "config.yaml",                      // 项目目录
+  "/etc/wechat-gateway/config.yaml",  // 系统目录
+];
+
+function findConfig(): string {
+  for (const p of CONFIG_PATHS) {
+    if (fs.existsSync(p)) return p;
+  }
+  return CONFIG_PATHS[0]; // fallback to default (will use all defaults)
+}
+
 async function main(): Promise<void> {
-  const config = loadConfig("config.yaml");
+  const configPath = findConfig();
+  const config = loadConfig(configPath);
 
   // Handle --logout
   if (process.argv.includes("--logout")) {
