@@ -29,11 +29,6 @@ export class WebhookChannel implements Channel {
     return new Promise((resolve) => {
       this.server = http.createServer(async (req, res) => {
         try {
-          if (req.method !== "POST") {
-            respond(res, 405, { error: "Method not allowed" });
-            return;
-          }
-
           const url = new URL(req.url ?? "", "http://localhost");
           const segments = url.pathname.split("/");
           const endpointName = segments[2];
@@ -52,14 +47,16 @@ export class WebhookChannel implements Channel {
             return;
           }
 
-          // Merge data from query params + JSON body (query takes precedence)
+          // Merge data: query params + JSON body (supports GET and POST)
           let data: Record<string, unknown> = {};
-          const raw = await readBody(req);
-          if (raw.trim()) {
-            try {
-              data = JSON.parse(raw) as Record<string, unknown>;
-            } catch {
-              // Body is not JSON — ignore, use query params only
+          if (req.method === "POST") {
+            const raw = await readBody(req);
+            if (raw.trim()) {
+              try {
+                data = JSON.parse(raw) as Record<string, unknown>;
+              } catch {
+                // Body is not JSON — ignore, use query params only
+              }
             }
           }
           for (const [key, val] of url.searchParams) {
