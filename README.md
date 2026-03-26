@@ -137,13 +137,25 @@ channels:
     port: 9100
     token: "my-secret"    # 留空则不校验
     endpoints:
+      ha:
+        template: "{{message}}"
       transmission:
         template: "任务 {{name}} 下载完成（{{size}}）"
-      doorbell:
-        template: "{{message}}"
 ```
 
 **外部系统 → 微信：**
+
+```bash
+# 通用消息（HomeAssistant / curl / 任意 HTTP 客户端）
+curl -X POST http://localhost:9100/webhook/ha \
+  -H "Authorization: Bearer my-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "前门已打开"}'
+```
+
+```
+微信聊天框收到：[webhook-ha] 前门已打开
+```
 
 ```bash
 # Transmission 下载完成回调
@@ -157,17 +169,6 @@ curl -X POST http://localhost:9100/webhook/transmission \
 微信聊天框收到：[webhook-transmission] 任务 ubuntu-24.04.iso 下载完成（4.2GB）
 ```
 
-```bash
-# 门铃通知
-curl -X POST http://localhost:9100/webhook/doorbell \
-  -H "Content-Type: application/json" \
-  -d '{"message": "有人按门铃"}'
-```
-
-```
-微信聊天框收到：[webhook-doorbell] 有人按门铃
-```
-
 **模板语法：** `{{key}}` 会被 JSON body 中对应字段的值替换。
 
 **HTTP 响应：**
@@ -179,6 +180,40 @@ curl -X POST http://localhost:9100/webhook/doorbell \
 | 401 | token 不匹配 |
 | 404 | endpoint 不存在 |
 | 405 | 非 POST 方法 |
+
+**HomeAssistant 对接：**
+
+在 HA 的 `configuration.yaml` 中添加，即可获得 `notify.wechat` 服务：
+
+```yaml
+# 方式一：notify 平台（推荐，像 Pushbullet 一样用）
+notify:
+  - platform: rest
+    name: wechat
+    resource: http://localhost:9100/webhook/ha
+    method: POST_JSON
+    headers:
+      Authorization: "Bearer my-secret"
+    data:
+      message: "{{ message }}"
+```
+
+重启 HA 后，自动化直接调用：
+
+```yaml
+automation:
+  - alias: "门窗告警"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.front_door
+        to: "on"
+    action:
+      - service: notify.wechat
+        data:
+          message: "前门已打开"
+```
+
+也可以在 HA 的 **开发者工具 → 服务** 中搜索 `notify.wechat`，手动发消息测试。
 
 ---
 

@@ -10,10 +10,12 @@ channels:
     port: 9100
     token: ""  # Optional Bearer token auth; empty = no auth
     endpoints:
+      # HomeAssistant notify / rest_command 通用接口
+      ha:
+        template: "{{message}}"
+      # Transmission 下载完成回调
       transmission:
         template: "任务 {{name}} 下载完成（{{size}}）"
-      doorbell:
-        template: "{{message}}"
 
   mqtt:
     enabled: false
