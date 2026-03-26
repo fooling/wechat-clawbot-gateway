@@ -55,6 +55,11 @@ export interface OpenClawConfig {
   token: string;
 }
 
+export interface IftttConfig {
+  enabled: boolean;
+  key: string;
+}
+
 // ── Gateway Config ─────────────────────────────────────
 
 export interface GatewayConfig {
@@ -64,6 +69,7 @@ export interface GatewayConfig {
     mqtt?: MqttConfig;
     llm?: Record<string, LlmModelConfig>;
     openclaw?: OpenClawConfig;
+    ifttt?: IftttConfig;
   };
 }
 

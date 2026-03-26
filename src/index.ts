@@ -6,6 +6,7 @@ import { WebhookChannel } from "./channels/webhook.js";
 import { MqttChannel } from "./channels/mqtt.js";
 import { LlmChannel } from "./channels/llm.js";
 import { OpenClawChannel } from "./channels/openclaw.js";
+import { IftttChannel } from "./channels/ifttt.js";
 import { loadConfig } from "./config.js";
 import type { LogEntry, DebugEntry } from "./channels/channel.js";
 
@@ -69,6 +70,9 @@ async function main(): Promise<void> {
   }
   if (config.channels.openclaw?.enabled) {
     gateway.use(new OpenClawChannel(config.channels.openclaw));
+  }
+  if (config.channels.ifttt?.enabled) {
+    gateway.use(new IftttChannel(config.channels.ifttt));
   }
 
   // Start gateway

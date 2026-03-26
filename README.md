@@ -319,6 +319,67 @@ channels:
 
 ---
 
+### IFTTT — 双向自动化
+
+微信触发 IFTTT Applet，或 IFTTT 事件推送到微信。
+
+**配置示例：**
+
+```yaml
+channels:
+  # 出站：微信 → IFTTT（/ifttt 命令触发 Maker Webhooks）
+  ifttt:
+    enabled: true
+    key: "your-ifttt-webhooks-key"    # https://ifttt.com/maker_webhooks → Documentation
+
+  # 入站：IFTTT → 微信（通过 Webhook channel 接收）
+  webhook:
+    enabled: true
+    port: 9100
+    endpoints:
+      ifttt:
+        template: "{{message}}"
+```
+
+**微信 → IFTTT（触发 Applet）：**
+
+```
+微信聊天框输入：/ifttt scene_arrived_home
+  → 微信聊天框收到：[ifttt] 已触发: scene_arrived_home
+  → IFTTT Maker Webhooks 收到 trigger，执行关联的 Applet
+```
+
+```
+微信聊天框输入：/ifttt send_note 记得买牛奶
+  → 微信聊天框收到：[ifttt] 已触发: send_note
+  → IFTTT 收到 event=send_note, value1="记得买牛奶"
+```
+
+```
+微信聊天框输入：/ifttt
+  → 微信聊天框收到：[ifttt] 用法: /ifttt <event> [message]
+```
+
+IFTTT 侧创建 Applet：**If** Webhooks (Receive a web request) → event name 填对应的事件名 → **Then** 执行动作。
+
+**IFTTT → 微信（Applet 推送通知）：**
+
+在 IFTTT Applet 的 **Then** 动作中选 Webhooks (Make a web request)：
+
+| 字段 | 值 |
+|------|-----|
+| URL | `http://<your-ip>:9100/webhook/ifttt` |
+| Method | POST |
+| Content Type | application/json |
+| Body | `{"message": "{{EventName}} triggered"}` |
+
+```
+IFTTT Applet 触发 → POST 到 webhook
+  → 微信聊天框收到：[webhook-ifttt] weather_alert triggered
+```
+
+---
+
 ### OpenClaw — Agent 接入服务端
 
 将 Gateway 反向暴露为 OpenClaw 兼容 HTTP 接口，让外部 AI Agent 框架通过标准协议接入微信。

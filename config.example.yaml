@@ -17,6 +17,9 @@ channels:
       # URL模板: http://<ip>:9100/webhook/qnap?msg=@@Text@@&phone=@@PhoneNumber@@
       qnap:
         template: "{{msg}}"
+      # IFTTT Webhooks → 微信（IFTTT action POST 到这个 endpoint）
+      ifttt:
+        template: "{{message}}"
       # Transmission 下载完成回调
       transmission:
         template: "任务 {{name}} 下载完成（{{size}}）"
@@ -51,3 +54,8 @@ channels:
     enabled: false
     port: 9200
     token: "my-secret"
+
+  # IFTTT: 微信 → IFTTT Maker Webhooks（/ifttt event message）
+  ifttt:
+    enabled: false
+    key: "your-ifttt-webhooks-key"  # https://ifttt.com/maker_webhooks → Documentation
