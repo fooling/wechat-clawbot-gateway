@@ -1,0 +1,16 @@
+[Unit]
+Description=WeChat Channel Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=wechat
+WorkingDirectory=/opt/wechat-gateway
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=10
+TimeoutStopSec=60
+EnvironmentFile=/opt/wechat-gateway/.env
+
+[Install]
+WantedBy=multi-user.target

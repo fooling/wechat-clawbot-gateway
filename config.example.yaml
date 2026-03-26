@@ -1,0 +1,46 @@
+wechat:
+  credentials_path: data/credentials.json
+  # Leave empty to auto-capture first message sender
+  notify_user: ""
+
+channels:
+  webhook:
+    enabled: false
+    port: 9100
+    token: ""  # Optional Bearer token auth; empty = no auth
+    endpoints:
+      transmission:
+        template: "任务 {{name}} 下载完成（{{size}}）"
+      doorbell:
+        template: "{{message}}"
+
+  mqtt:
+    enabled: false
+    broker: mqtt://localhost:1883
+    username: ""
+    password: ""
+    subscribe:
+      - topic: wechat/notify/plain
+        tag: ha
+    commands:
+      ha:
+        topic: wechat/command
+
+  llm:
+    deepseek:
+      enabled: false
+      base_url: https://api.deepseek.com
+      model: deepseek-chat
+      api_key_env: DEEPSEEK_API_KEY
+      system_prompt: "简洁回答问题。"
+    gpt:
+      enabled: false
+      base_url: https://api.openai.com/v1
+      model: gpt-4o
+      api_key_env: OPENAI_API_KEY
+      system_prompt: ""
+
+  openclaw:
+    enabled: false
+    port: 9200
+    token: "my-secret"
