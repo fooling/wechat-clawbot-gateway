@@ -469,16 +469,71 @@ gateway.use(new MyChannel());
 
 ## 部署
 
+### 方式一：一键安装脚本
+
 ```bash
-# 1. 首次 TUI 模式扫码
+npm run build                    # 编译 TypeScript
+sudo bash deploy/install.sh      # 安装到 /opt/wechat-gateway
+```
+
+脚本会自动：创建 `wechat` 系统用户 → 复制编译产物 → 安装生产依赖 → 注册 systemd 服务。
+
+安装完成后按提示操作：
+
+```bash
+# 1. 编辑配置
+sudo vim /opt/wechat-gateway/config.yaml
+
+# 2. 创建 .env（如果启用了 LLM Channel）
+sudo vim /opt/wechat-gateway/.env
+# 内容示例：
+# DEEPSEEK_API_KEY=sk-xxx
+
+# 3. 首次运行：TUI 模式扫码登录
+sudo -u wechat node /opt/wechat-gateway/dist/index.js --tui
+# 扫码确认后 Ctrl+C 退出
+
+# 4. 启动后台服务
+sudo systemctl enable --now wechat-gateway
+
+# 查看日志
+journalctl -u wechat-gateway -f
+
+# 停止/重启
+sudo systemctl stop wechat-gateway
+sudo systemctl restart wechat-gateway
+```
+
+### 方式二：手动部署
+
+```bash
+# 1. 编译
+npm run build
+
+# 2. 复制 service 文件（按需修改路径和用户）
+sudo cp deploy/wechat-gateway.service /etc/systemd/system/
+sudo systemctl daemon-reload
+
+# 3. 首次 TUI 扫码
 node dist/index.js --tui
 
-# 2. systemd 后台运行
-sudo cp deploy/wechat-gateway.service /etc/systemd/system/
+# 4. 启动服务
 sudo systemctl enable --now wechat-gateway
 ```
 
-详见 `deploy/install.sh`。
+### 目录结构（安装后）
+
+```
+/opt/wechat-gateway/
+├── dist/                    # 编译产物
+├── node_modules/            # 生产依赖
+├── package.json
+├── config.yaml              # 运行配置（从 config.example.yaml 复制）
+├── .env                     # API Key（权限 600）
+└── data/
+    ├── credentials.json     # 微信凭证（扫码后自动生成，权限 600）
+    └── notify_user          # 自动记录的通知用户 ID
+```
 
 ## 协议说明
 
