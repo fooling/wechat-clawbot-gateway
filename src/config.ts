@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { parse } from "yaml";
 
 // ── Wechat ─────────────────────────────────────────────
@@ -85,7 +87,7 @@ export function loadConfig(configPath: string): GatewayConfig {
 
   return {
     wechat: {
-      credentials_path: wechat.credentials_path ?? "data/credentials.json",
+      credentials_path: wechat.credentials_path ?? path.join(os.homedir(), ".wechat-gateway", "credentials.json"),
       notify_user: wechat.notify_user ?? "",
     },
     channels: (raw.channels ?? {}) as GatewayConfig["channels"],

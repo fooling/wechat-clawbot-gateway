@@ -1,5 +1,6 @@
 wechat:
-  credentials_path: data/credentials.json
+  # Default: ~/.wechat-gateway/credentials.json
+  # credentials_path: ~/.wechat-gateway/credentials.json
   # Leave empty to auto-capture first message sender
   notify_user: ""
 
