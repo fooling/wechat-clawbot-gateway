@@ -76,9 +76,20 @@ export class ExecChannel implements Channel {
       try {
         const { stdout, stderr, code } = await runCommand(cmd, timeoutMs);
 
+        // Build template vars: base fields + JSON-parsed stdout fields
+        const vars: Record<string, string | number> = { stdout, stderr, args: actualArgs, code };
+        try {
+          const json = JSON.parse(stdout) as Record<string, unknown>;
+          for (const [k, v] of Object.entries(json)) {
+            if (!(k in vars)) vars[k] = v == null ? "" : String(v);
+          }
+        } catch {
+          // Not JSON — only {{stdout}} available
+        }
+
         const template = loadTemplate(action);
         if (template) {
-          return renderTemplate(template, { stdout, stderr, args: actualArgs, code });
+          return renderTemplate(template, vars);
         }
         return `[${this.name}] ${stdout || stderr}`;
       } catch (err) {
