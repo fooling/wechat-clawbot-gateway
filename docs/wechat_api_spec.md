@@ -200,35 +200,131 @@ media.aes_key (base64) = "NjdkNzYyOWNiYzI1MmVkNWExNjk3OWMwOThlNmYzZTE="
 
 ## 媒体下载流程
 
+**CDN 域名：** `https://novac2c.cdn.weixin.qq.com/c2c`
+
 ```
-1. 从 media.encrypt_query_param 获取参数
-2. GET https://novac2c.cdn.weixin.qq.com/c2c/download?{encrypt_query_param}
-3. 用 AES-128-ECB 解密（key 从 media.aes_key 解码，注意两种格式）
+1. 从 media.encrypt_query_param 获取参数（标准 base64 字符串）
+2. GET https://novac2c.cdn.weixin.qq.com/c2c/download?encrypted_query_param={encodeURIComponent(param)}
+3. 用 AES-128-ECB 解密响应 body（key 从 media.aes_key 解码，注意两种格式）
 4. 得到原始文件
+```
+
+**注意：** 下载 URL 的 query 参数名是 `encrypted_query_param`，值需要 URL 编码。
+
+**实测验证（2026-03-27）：**
+
+```bash
+# 正确 ✅
+GET /c2c/download?encrypted_query_param=NFN4Z28yTzd2WkZQ... → 200
+
+# 错误 ❌（缺参数名）
+GET /c2c/download?NFN4Z28yTzd2WkZQ... → 400
 ```
 
 ## 媒体上传流程
 
+完整的上传需要 3 步：getuploadurl → CDN POST → sendmessage。
+
+**实测验证（2026-03-27），完整成功。**
+
+### Step 1: getuploadurl — 获取上传参数
+
 ```
-1. 生成随机 AES-128 key
-2. AES-128-ECB 加密文件
-3. POST ilink/bot/getuploadurl 获取上传参数
-   请求: { media_type, rawsize, filesize, rawfilemd5, aeskey, ... }
-   响应: { upload_param, thumb_upload_param }
-4. PUT 加密文件到 CDN
-5. 构建 CDNMedia { encrypt_query_param: upload_param, aes_key: base64(key) }
-6. 放入 sendmessage 的 item_list 中对应的 *_item 字段
+POST {baseUrl}/ilink/bot/getuploadurl
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "filekey": "{随机 hex 32 字符}",          // crypto.randomBytes(16).toString('hex')
+  "media_type": 1,                          // UploadMediaType 枚举
+  "to_user_id": "xxx@im.wechat",           // 接收者（可选）
+  "rawsize": 4368393,                       // 原始文件大小
+  "rawfilemd5": "abc123...",                // 原始文件 MD5 hex
+  "filesize": 4368400,                      // AES 加密后文件大小
+  "aeskey": "a182e4fe52ea1616...",          // AES key hex 字符串（32 字符）
+  "no_need_thumb": true                     // 不需要缩略图上传
+}
+
+→ 响应:
+{
+  "upload_param": "UC1wVWEtOHJXXzhQ...",    // CDN 上传参数（base64）
+  "thumb_upload_param": "..."               // 缩略图上传参数（no_need_thumb=true 时无）
+}
 ```
 
-`getuploadurl` 的 `media_type` 枚举（注意与 MessageItemType 不同）：
+**`media_type` 枚举（注意与 MessageItemType 不同）：**
 
 ```typescript
 const UploadMediaType = {
-  IMAGE: 1,
-  VIDEO: 2,
-  FILE: 3,
-  VOICE: 4,
+  IMAGE: 1,    // MessageItemType.IMAGE = 2
+  VIDEO: 2,    // MessageItemType.VIDEO = 5
+  FILE: 3,     // MessageItemType.FILE = 4
+  VOICE: 4,    // MessageItemType.VOICE = 3
 } as const;
+```
+
+**加密后大小计算：** AES-128-ECB + PKCS7 padding，`Math.ceil((rawsize + 1) / 16) * 16`。
+
+### Step 2: CDN 上传 — POST 加密文件
+
+```
+POST https://novac2c.cdn.weixin.qq.com/c2c/upload
+  ?encrypted_query_param={encodeURIComponent(upload_param)}
+  &filekey={encodeURIComponent(filekey)}
+Content-Type: application/octet-stream
+Body: {AES-128-ECB 加密后的文件 binary}
+
+→ 响应 Headers:
+  x-encrypted-param: C_k00QSN...            ← ⚠️ 不要用这个！
+  x-encrypted-query-param: U0J1R2dkTkcw...  ← ✅ 这个才是下载参数
+```
+
+**关键坑点：** CDN 上传响应返回**两个 header**：
+- `x-encrypted-param` — 格式不兼容下载端（URL-safe base64），用于下载会 400 ❌
+- `x-encrypted-query-param` — 标准 base64，与收到消息中的 `encrypt_query_param` 格式一致 ✅
+
+**备选方案：** `upload_param`（Step 1 返回的）也可以直接作为下载参数使用（实测可行）。
+
+### Step 3: sendmessage — 发送图片消息
+
+```json
+{
+  "msg": {
+    "to_user_id": "xxx@im.wechat",
+    "message_type": 2,
+    "message_state": 2,
+    "item_list": [{
+      "type": 2,
+      "image_item": {
+        "aeskey": "a182e4fe52ea1616b44aa9c80a60175a",
+        "media": {
+          "encrypt_query_param": "U0J1R2dkTkcw...",
+          "aes_key": "YTE4MmU0ZmU1MmVhMTYxNmI0NGFhOWM4MGE2MDE3NWE="
+        },
+        "mid_size": 4368400,
+        "hd_size": 4368400
+      }
+    }]
+  }
+}
+```
+
+**字段说明：**
+
+| 字段 | 值 | 说明 |
+|------|-----|------|
+| `image_item.aeskey` | hex 字符串 | AES key 的 hex 编码（32 字符） |
+| `media.encrypt_query_param` | base64 字符串 | 来自 CDN 响应 `x-encrypted-query-param` header |
+| `media.aes_key` | base64(hex) 字符串 | 同一个 key，先 hex 编码再 base64 |
+| `mid_size` / `hd_size` | number | 加密后文件大小 |
+
+### 完整流程验证日志
+
+```
+1. getuploadurl → upload_param: UC1wVWEtOHJX...
+2. CDN POST → 200, x-encrypted-query-param: U0J1R2dkTkcw...
+3. 验证下载 → 200, 解密后 4368393 bytes, 与原文件一致 ✅
+4. sendmessage → 微信收到图片，可正常打开 ✅
 ```
 
 ## 引用消息
@@ -257,6 +353,52 @@ POST ilink/bot/sendtyping
 POST ilink/bot/getconfig
 → { typing_ticket }
 ```
+
+## Bot 发送能力矩阵
+
+**实测验证（2026-03-27），基于 iLink Bot API + 多个开源 SDK 交叉验证。**
+
+| 类型 | 接收 | 发送 | 说明 |
+|------|------|------|------|
+| TEXT (1) | ✅ | ✅ | |
+| IMAGE (2) | ✅ | ✅ | CDN 上传 + sendmessage image_item，实测通过 |
+| VOICE (3) | ✅ | ❌ | 接收含 STT 文字（`voice_item.text`）；发送 API 不报错但微信不显示 |
+| FILE (4) | ✅ | ✅ | 实测通过，文件名和大小正确 |
+| VIDEO (5) | ✅ | ❌ | 发送 API 不报错但微信不显示 |
+
+### 验证细节
+
+**VOICE 发送测试：**
+- 用 silk-wasm 编码为 SILK 格式（`#!SILK_V3` header 正确）
+- CDN 上传成功（UploadMediaType.VOICE = 4）
+- sendmessage 返回成功
+- 测试了 encode_type: 4 (speex) / 6 (silk)，sample_rate: 16000 / 24000
+- 微信端均无显示
+- 官方 SDK（openclaw-weixin）无 voice 上传函数
+- cc-weixin 的"语音发送"实际是以 FILE 类型发送音频文件
+
+**VIDEO 发送测试：**
+- 带缩略图上传：CDN 报 `probe preview error, cdngetaeskey failed`
+- 不带缩略图上传：CDN 成功，sendmessage 返回成功
+- 微信端无显示
+- cc-weixin 明确标注 Video 发送为 "—"（不支持）
+
+### 变通方案
+
+| 需求 | 方案 |
+|------|------|
+| 发送音频 | 以 FILE 类型发送（用户可下载播放） |
+| 发送视频 | 以 FILE 类型发送（用户可下载播放） |
+| 回复语音消息 | 使用 `voice_item.text`（微信 STT 结果）作为文本处理 |
+
+### 平台限制总结
+
+iLink Bot API（message_type=BOT）仅支持发送以下 item_list 类型：
+- `text_item` (type: 1)
+- `image_item` (type: 2)
+- `file_item` (type: 4)
+
+`voice_item` (type: 3) 和 `video_item` (type: 5) 在 sendmessage 中被静默忽略。微信限制：**文字和媒体必须在不同消息中分开发送**，不支持单条消息混合 text + image。
 
 ## 参考
 

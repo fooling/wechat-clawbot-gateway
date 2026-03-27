@@ -10,10 +10,12 @@
 ## 特性
 
 - **Gateway + Channel 插件架构** — 微信是通道，不是应用
+- **多媒体消息** — 接收图片/语音(自动转文字)/文件/视频；发送图片/文件
 - **TUI 终端控制台** — 实时消息监控 + 手动聊天
-- **Webhook** — 外部系统 HTTP 调用 → 微信通知（Transmission、门铃等）
+- **Webhook** — 外部系统 HTTP 调用 → 微信通知（HA、QNAP、Transmission 等）
 - **MQTT 双向桥接** — 对接 HomeAssistant 等智能家居
 - **LLM 无状态透传** — 命令触发的 AI 单次问答（DeepSeek、GPT 等）
+- **IFTTT 双向自动化** — 微信触发 IFTTT Applet / IFTTT 推送到微信
 - **OpenClaw 服务端** — 暴露 iLink 兼容接口，让外部 Agent 接入微信
 - **扫码即用** — 凭证持久化，重启无需重新扫码
 
@@ -39,16 +41,21 @@ npm run dev -- --logout  # 清除凭证重新登录
 
 ```yaml
 wechat:
-  credentials_path: data/credentials.json
+  # 默认: ~/.wechat-gateway/credentials.json
+  # credentials_path: ~/.wechat-gateway/credentials.json
   notify_user: ""          # 留空自动捕获首条消息发送者
 
 channels:
   webhook:
     enabled: false
     port: 9100
-    token: ""
+    token: ""              # 留空不校验鉴权
     endpoints:
-      transmission:
+      ha:                  # HomeAssistant notify 通用接口
+        template: "{{message}}"
+      qnap:                # QNAP Notification Center（自定义 SMS）
+        template: "{{msg}}"
+      transmission:        # Transmission 下载完成回调
         template: "任务 {{name}} 下载完成（{{size}}）"
 
   mqtt:
@@ -73,9 +80,14 @@ channels:
     enabled: false
     port: 9200
     token: "my-secret"
+
+  ifttt:
+    enabled: false
+    key: "your-ifttt-webhooks-key"
 ```
 
 API Key 放在 `.env` 文件中（参考 `.env.example`）。
+配置文件查找顺序：`./config.yaml` → `/etc/wechat-gateway/config.yaml`。
 
 ## 架构
 
@@ -84,8 +96,8 @@ WeChat User → iLink Gateway ↔ WxClient (long-poll)
                                   ↓
                               Gateway (路由 + 事件总线)
                                   ↓
-              ┌─────────┬────────┬────────┬──────────┐
-              TUI    Webhook   MQTT     LLM    OpenClaw
+         ┌───────┬────────┬──────┬──────┬─────────┬───────┐
+         TUI  Webhook   MQTT   LLM   IFTTT   OpenClaw
 ```
 
 ## Channel 使用指南
@@ -126,7 +138,7 @@ WeChat User → iLink Gateway ↔ WxClient (long-poll)
 
 ### Webhook — HTTP 通知转发
 
-外部系统通过 HTTP POST 发送数据，经模板渲染后转发到微信。**单向：外部 → 微信。**
+外部系统通过 HTTP GET/POST 发送数据，经模板渲染后转发到微信。**单向：外部 → 微信。** 支持 JSON body 和 URL query 参数（兼容 QNAP 自定义 SMS 等）。
 
 **配置示例：**
 
@@ -139,6 +151,8 @@ channels:
     endpoints:
       ha:
         template: "{{message}}"
+      qnap:
+        template: "{{msg}}"
       transmission:
         template: "任务 {{name}} 下载完成（{{size}}）"
 ```
@@ -169,7 +183,17 @@ curl -X POST http://localhost:9100/webhook/transmission \
 微信聊天框收到：[webhook-transmission] 任务 ubuntu-24.04.iso 下载完成（4.2GB）
 ```
 
-**模板语法：** `{{key}}` 会被 JSON body 中对应字段的值替换。
+```bash
+# QNAP Notification Center（自定义 SMS 提供商，GET + query 参数）
+# QNAP URL模板: http://<ip>:9100/webhook/qnap?msg=@@Text@@&phone=@@PhoneNumber@@
+curl "http://localhost:9100/webhook/qnap?msg=磁盘温度过高&phone=10086"
+```
+
+```
+微信聊天框收到：[webhook-qnap] 磁盘温度过高
+```
+
+**模板语法：** `{{key}}` 会被 JSON body 或 URL query 参数中对应字段的值替换。支持 GET 和 POST。
 
 **HTTP 响应：**
 
@@ -473,6 +497,7 @@ src/
     ├── webhook.ts           # Webhook（HTTP → 微信通知）
     ├── mqtt.ts              # MQTT 双向桥接
     ├── llm.ts               # LLM 无状态透传
+    ├── ifttt.ts             # IFTTT 双向自动化
     └── openclaw.ts          # OpenClaw 服务端
 ```
 

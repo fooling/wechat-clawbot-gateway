@@ -92,7 +92,8 @@ export class Gateway extends EventEmitter {
         this.defaultHandler = { channel: channelName, handler };
       },
       sendMedia: async (userId: string, items: MessageItem[]) => {
-        this.emitLog("out", channelName, userId, "[media]");
+        const types = items.map(i => i.type).join(",");
+        this.emitLog("out", channelName, userId, `[media:${types}]`);
         await this.wxClient.sendMedia(userId, items);
       },
       notifyMedia: async (items: MessageItem[]) => {
@@ -100,7 +101,8 @@ export class Gateway extends EventEmitter {
           this.emitDebug(channelName, "notify_user not set, media dropped");
           return;
         }
-        this.emitLog("out", channelName, this.notifyUser, "[media]");
+        const types = items.map(i => i.type).join(",");
+        this.emitLog("out", channelName, this.notifyUser, `[media:${types}]`);
         await this.wxClient.sendMedia(this.notifyUser, items);
       },
       downloadMedia: async (cdnMedia: CDNMedia) => {

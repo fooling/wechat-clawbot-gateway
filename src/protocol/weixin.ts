@@ -8,7 +8,8 @@ const BOT_TYPE = "3";
 const DEFAULT_API_TIMEOUT_MS = 30_000;
 const DEFAULT_LONG_POLL_TIMEOUT_MS = 35_000;
 const QR_POLL_TIMEOUT_MS = 35_000;
-const CDN_BASE = "https://novac2c.cdn.weixin.qq.com/c2c/download";
+const CDN_DOWNLOAD = "https://novac2c.cdn.weixin.qq.com/c2c/download";
+const CDN_UPLOAD = "https://novac2c.cdn.weixin.qq.com/c2c/upload";
 
 // ── Type Definitions ───────────────────────────────────────
 
@@ -276,6 +277,34 @@ export async function pollQRStatus(qrcodeStr: string): Promise<QRStatusResponse>
   }, "pollQRStatus");
 }
 
+// ── Send Constraints ───────────────────────────────────────
+
+// Bot API only supports sending these item types. VOICE/VIDEO are silently ignored by WeChat.
+const SENDABLE_ITEM_TYPES: Set<number> = new Set([MessageItemType.TEXT, MessageItemType.IMAGE, MessageItemType.FILE]);
+
+// uploadMedia only supports IMAGE and FILE. VIDEO/VOICE uploads succeed at CDN but fail at send.
+const UPLOADABLE_MEDIA_TYPES: Set<number> = new Set([UploadMediaType.IMAGE, UploadMediaType.FILE]);
+
+export function mediaItemAsFile(item: MessageItem): MessageItem | null {
+  if (item.type === MessageItemType.VOICE && item.voice_item?.media) {
+    return {
+      type: MessageItemType.FILE,
+      file_item: { media: item.voice_item.media, file_name: "voice.silk" },
+    };
+  }
+  if (item.type === MessageItemType.VIDEO && item.video_item?.media) {
+    return {
+      type: MessageItemType.FILE,
+      file_item: {
+        media: item.video_item.media,
+        file_name: "video.mp4",
+        len: item.video_item.video_size ? String(item.video_item.video_size) : undefined,
+      },
+    };
+  }
+  return null;
+}
+
 // ── Messaging Functions ────────────────────────────────────
 
 export async function getUpdates(
@@ -307,6 +336,14 @@ export async function sendMessage(
   items: MessageItem[],
   contextToken?: string,
 ): Promise<void> {
+  // Filter unsupported types (VOICE/VIDEO silently ignored by WeChat)
+  const sanitized = items.filter(item => {
+    if (!item.type || SENDABLE_ITEM_TYPES.has(item.type)) return true;
+    console.error(`[wx] sendMessage: item type ${item.type} not supported by bot API, dropped`);
+    return false;
+  });
+  if (!sanitized.length) return;
+
   const clientId = `bot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await apiPost(
     baseUrl,
@@ -318,7 +355,7 @@ export async function sendMessage(
         client_id: clientId,
         message_type: MessageType.BOT,
         message_state: MessageState.FINISH,
-        item_list: items.length ? items : undefined,
+        item_list: sanitized.length ? sanitized : undefined,
         context_token: contextToken,
       } satisfies WeixinMessage,
     },
@@ -420,7 +457,7 @@ export async function downloadMedia(cdnMedia: CDNMedia): Promise<Buffer> {
   const aesKeyStr = cdnMedia.aes_key;
   if (!aesKeyStr) throw new Error("Missing aes_key");
 
-  const url = `${CDN_BASE}?encrypted_query_param=${encodeURIComponent(param)}`;
+  const url = `${CDN_DOWNLOAD}?encrypted_query_param=${encodeURIComponent(param)}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`CDN download failed: ${res.status}`);
   const encrypted = Buffer.from(await res.arrayBuffer());
@@ -444,6 +481,10 @@ export async function uploadMedia(
   toUser?: string,
   options?: { thumb?: Buffer },
 ): Promise<UploadResult> {
+  if (!UPLOADABLE_MEDIA_TYPES.has(mediaType)) {
+    throw new Error(`uploadMedia: media_type ${mediaType} not supported (use IMAGE=1 or FILE=3)`);
+  }
+
   const aesKey = crypto.randomBytes(16);
   const aesKeyHex = aesKey.toString("hex");
   const filekey = crypto.randomBytes(16).toString("hex");
@@ -480,7 +521,7 @@ export async function uploadMedia(
   }
 
   // 2. Upload encrypted file to CDN
-  const cdnUploadUrl = `${CDN_BASE.replace("/download", "/upload")}?encrypted_query_param=${encodeURIComponent(uploadResp.upload_param)}&filekey=${encodeURIComponent(filekey)}`;
+  const cdnUploadUrl = `${CDN_UPLOAD}?encrypted_query_param=${encodeURIComponent(uploadResp.upload_param)}&filekey=${encodeURIComponent(filekey)}`;
   const cdnRes = await fetch(cdnUploadUrl, {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream" },
@@ -491,10 +532,11 @@ export async function uploadMedia(
     throw new Error(`CDN upload failed: ${cdnRes.status} ${errMsg}`);
   }
 
-  const downloadParam = cdnRes.headers.get("x-encrypted-param");
-  if (!downloadParam) {
-    throw new Error("CDN upload succeeded but missing x-encrypted-param header");
-  }
+  // x-encrypted-query-param is the correct header for download compatibility
+  // x-encrypted-param exists but uses URL-safe base64 which fails on download (400)
+  // Fallback to upload_param which also works for download
+  const downloadParam = cdnRes.headers.get("x-encrypted-query-param")
+    ?? uploadResp.upload_param;
 
   const aesKeyBase64 = Buffer.from(aesKeyHex).toString("base64");
 
@@ -503,14 +545,15 @@ export async function uploadMedia(
   if (options?.thumb && uploadResp.thumb_upload_param) {
     const tc = crypto.createCipheriv("aes-128-ecb", aesKey, null);
     const thumbEncrypted = Buffer.concat([tc.update(options.thumb), tc.final()]);
-    const thumbUrl = `${CDN_BASE.replace("/download", "/upload")}?encrypted_query_param=${encodeURIComponent(uploadResp.thumb_upload_param)}&filekey=${encodeURIComponent(filekey)}`;
+    const thumbUrl = `${CDN_UPLOAD}?encrypted_query_param=${encodeURIComponent(uploadResp.thumb_upload_param)}&filekey=${encodeURIComponent(filekey)}`;
     const thumbRes = await fetch(thumbUrl, {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream" },
       body: new Uint8Array(thumbEncrypted),
     });
     if (thumbRes.ok) {
-      const thumbDownloadParam = thumbRes.headers.get("x-encrypted-param");
+      const thumbDownloadParam = thumbRes.headers.get("x-encrypted-query-param")
+        ?? uploadResp.thumb_upload_param;
       if (thumbDownloadParam) {
         thumbCdnMedia = { encrypt_query_param: thumbDownloadParam, aes_key: aesKeyBase64 };
       }

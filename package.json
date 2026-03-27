@@ -15,6 +15,7 @@
     "mqtt": "^5.10.0",
     "openai": "^4.76.0",
     "qrcode-terminal": "^0.12.0",
+    "silk-wasm": "^3.7.1",
     "yaml": "^2.7.0"
   },
   "devDependencies": {

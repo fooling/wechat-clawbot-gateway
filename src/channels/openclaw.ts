@@ -3,7 +3,9 @@ import { EventEmitter } from "node:events";
 import type { Channel, ChannelContext } from "./channel.js";
 import type { OpenClawConfig } from "../config.js";
 import type { WeixinMessage, IncomingMessage } from "../protocol/weixin.js";
-import { extractTextFromMessage, MessageType, MessageItemType, MessageState } from "../protocol/weixin.js";
+import { extractTextFromMessage, mediaItemAsFile, MessageType, MessageItemType, MessageState } from "../protocol/weixin.js";
+
+const SENDABLE_TYPES: Set<number> = new Set([MessageItemType.TEXT, MessageItemType.IMAGE, MessageItemType.FILE]);
 
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -123,11 +125,17 @@ export class OpenClawChannel implements Channel {
         await this.ctx!.notify("[openclaw] " + text);
       }
     }
-    if (mediaItems.length > 0) {
+    // Filter + downgrade unsupported types (VOICE→FILE, VIDEO→FILE)
+    const safeItems = mediaItems.flatMap(item => {
+      if (SENDABLE_TYPES.has(item.type!)) return [item];
+      const fallback = mediaItemAsFile(item);
+      return fallback ? [fallback] : [];
+    });
+    if (safeItems.length > 0) {
       if (msg.to_user_id) {
-        await this.ctx!.sendMedia(msg.to_user_id, mediaItems);
+        await this.ctx!.sendMedia(msg.to_user_id, safeItems);
       } else {
-        await this.ctx!.notifyMedia(mediaItems);
+        await this.ctx!.notifyMedia(safeItems);
       }
     }
 
