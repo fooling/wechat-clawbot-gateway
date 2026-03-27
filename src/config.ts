@@ -60,6 +60,20 @@ export interface IftttConfig {
   key: string;
 }
 
+export interface ExecActionConfig {
+  command: string;
+  template?: string;
+  template_file?: string;
+}
+
+export interface ExecCommandConfig {
+  enabled: boolean;
+  help?: string;
+  timeout?: number;
+  default: ExecActionConfig;
+  subcommands?: Record<string, ExecActionConfig>;
+}
+
 // ── Gateway Config ─────────────────────────────────────
 
 export interface GatewayConfig {
@@ -70,6 +84,7 @@ export interface GatewayConfig {
     llm?: Record<string, LlmModelConfig>;
     openclaw?: OpenClawConfig;
     ifttt?: IftttConfig;
+    exec?: Record<string, ExecCommandConfig>;
   };
 }
 

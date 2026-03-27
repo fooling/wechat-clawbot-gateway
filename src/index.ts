@@ -7,6 +7,7 @@ import { MqttChannel } from "./channels/mqtt.js";
 import { LlmChannel } from "./channels/llm.js";
 import { OpenClawChannel } from "./channels/openclaw.js";
 import { IftttChannel } from "./channels/ifttt.js";
+import { ExecChannel } from "./channels/exec.js";
 import { loadConfig } from "./config.js";
 import type { LogEntry, DebugEntry } from "./channels/channel.js";
 
@@ -73,6 +74,11 @@ async function main(): Promise<void> {
   }
   if (config.channels.ifttt?.enabled) {
     gateway.use(new IftttChannel(config.channels.ifttt));
+  }
+  for (const [name, cfg] of Object.entries(config.channels.exec ?? {})) {
+    if (cfg.enabled) {
+      gateway.use(new ExecChannel(name, cfg));
+    }
   }
 
   // Start gateway

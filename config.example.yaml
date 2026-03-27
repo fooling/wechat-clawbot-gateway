@@ -59,3 +59,31 @@ channels:
   ifttt:
     enabled: false
     key: "your-ifttt-webhooks-key"  # https://ifttt.com/maker_webhooks → Documentation
+
+  # Exec: 微信命令 → Shell 执行（支持子命令 + 模板）
+  exec:
+    ip:
+      enabled: false
+      help: "查看公网IP"
+      default:
+        command: "curl -s ifconfig.me"
+        template: "公网IP: {{stdout}}"
+    disk:
+      enabled: false
+      help: "查看磁盘使用"
+      default:
+        command: "df -h"
+    # 带子命令示例：
+    # news:
+    #   enabled: false
+    #   help: "查看新闻"
+    #   timeout: 15
+    #   default:
+    #     command: "curl -s https://news-api.example.com/latest"
+    #     template: "📰 {{stdout}}"
+    #   subcommands:
+    #     all:
+    #       command: "curl -s https://news-api.example.com/all"
+    #     top:
+    #       command: "curl -s https://news-api.example.com/top"
+    #       template_file: "templates/news-top.txt"
