@@ -49,7 +49,7 @@ export class MqttChannel implements Channel {
       ctx.onCommand(cmd, async (_userId: string, args: string) => {
         client.publish(cmdCfg.topic, args);
         return "[" + cmd + "] 已发送";
-      });
+      }, `发送命令到 MQTT (topic: ${cmdCfg.topic})`);
     }
   }
 

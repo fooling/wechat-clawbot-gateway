@@ -30,7 +30,7 @@ export interface ChannelContext {
   downloadMedia(cdnMedia: CDNMedia): Promise<Buffer>;
 
   // Handler registration
-  onCommand(cmd: string, handler: CommandHandler): void;
+  onCommand(cmd: string, handler: CommandHandler, help?: string): void;
   onDefault(handler: MessageHandler): void;
   onMessage(handler: (msg: IncomingMessage) => void): void;
 

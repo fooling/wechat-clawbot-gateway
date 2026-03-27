@@ -16,7 +16,7 @@ import type { IncomingMessage, MessageItem, CDNMedia } from "../protocol/weixin.
 export class Gateway extends EventEmitter {
   private wxClient: WxClient;
   private channels: Channel[] = [];
-  private commandHandlers = new Map<string, { channel: string; handler: CommandHandler }>();
+  private commandHandlers = new Map<string, { channel: string; handler: CommandHandler; help?: string }>();
   private defaultHandler: { channel: string; handler: MessageHandler } | null = null;
   private notifyUser: string;
   private notifyUserPath: string;
@@ -79,11 +79,11 @@ export class Gateway extends EventEmitter {
         this.emitLog("out", channelName, this.notifyUser, text);
         await this.wxClient.send(this.notifyUser, text);
       },
-      onCommand: (cmd: string, handler: CommandHandler) => {
+      onCommand: (cmd: string, handler: CommandHandler, help?: string) => {
         if (this.commandHandlers.has(cmd)) {
           throw new Error(`Command /${cmd} already registered`);
         }
-        this.commandHandlers.set(cmd, { channel: channelName, handler });
+        this.commandHandlers.set(cmd, { channel: channelName, handler, help });
       },
       onDefault: (handler: MessageHandler) => {
         if (this.defaultHandler) {
@@ -134,6 +134,29 @@ export class Gateway extends EventEmitter {
       this.notifyUser = userId;
       this.saveNotifyUser(userId);
       this.emitDebug("gateway", `notify_user auto-captured: ${userId}`);
+    }
+
+    // Help: /? lists all commands, /cmd? shows help for specific command
+    if (text === "/?") {
+      const lines = ["可用命令:"];
+      for (const [cmd, entry] of this.commandHandlers) {
+        lines.push(`  /${cmd} — ${entry.help || entry.channel}`);
+      }
+      lines.push("", "输入 /命令? 查看具体用法");
+      const reply = lines.join("\n");
+      this.emitLog("out", "gateway", userId, reply);
+      await this.wxClient.send(userId, reply);
+      return;
+    }
+    if (text.startsWith("/") && text.endsWith("?") && text.length > 2) {
+      const cmd = text.slice(1, -1);
+      const entry = this.commandHandlers.get(cmd);
+      const reply = entry
+        ? `/${cmd} — ${entry.help || "无详细说明"}`
+        : `未知命令: /${cmd}\n输入 /? 查看所有可用命令`;
+      this.emitLog("out", "gateway", userId, reply);
+      await this.wxClient.send(userId, reply);
+      return;
     }
 
     // Command routing: /cmd args

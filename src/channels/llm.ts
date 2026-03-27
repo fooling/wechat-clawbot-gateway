@@ -48,7 +48,7 @@ export class LlmChannel implements Channel {
         ctx.debug("请求失败: " + message);
         return `[${this.name}] 请求失败: ${message}`;
       }
-    });
+    }, `AI 问答 (${this.config.model})\n  用法: /${this.name} <问题>`);
 
     ctx.debug("registered command /" + this.name + " → " + this.config.model);
   }

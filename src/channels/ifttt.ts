@@ -44,7 +44,7 @@ export class IftttChannel implements Channel {
         ctx.debug(`trigger error: ${message}`);
         return `[ifttt] 触发失败: ${message}`;
       }
-    });
+    }, "触发 IFTTT 自动化\n  用法: /ifttt <event> [message]");
 
     ctx.debug("registered command /ifttt → maker.ifttt.com");
   }

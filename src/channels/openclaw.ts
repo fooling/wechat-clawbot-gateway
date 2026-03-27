@@ -45,7 +45,7 @@ export class OpenClawChannel implements Channel {
         item_list: [{ type: MessageItemType.TEXT, text_item: { text: args } }],
       };
       this.enqueue(msg);
-    });
+    }, "发送消息给外部 AI Agent\n  用法: /openclaw <消息内容>");
 
     // Forward media messages to agent queue
     ctx.onMessage((incoming: IncomingMessage) => {
