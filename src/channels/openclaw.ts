@@ -2,7 +2,7 @@ import http from "node:http";
 import { EventEmitter } from "node:events";
 import type { Channel, ChannelContext } from "./channel.js";
 import type { OpenClawConfig } from "../config.js";
-import type { WeixinMessage } from "../protocol/weixin.js";
+import type { WeixinMessage, IncomingMessage } from "../protocol/weixin.js";
 import { extractTextFromMessage, MessageType, MessageItemType, MessageState } from "../protocol/weixin.js";
 
 function readBody(req: http.IncomingMessage): Promise<string> {
@@ -43,6 +43,13 @@ export class OpenClawChannel implements Channel {
         item_list: [{ type: MessageItemType.TEXT, text_item: { text: args } }],
       };
       this.enqueue(msg);
+    });
+
+    // Forward media messages to agent queue
+    ctx.onMessage((incoming: IncomingMessage) => {
+      if (incoming.mediaType) {
+        this.enqueue(incoming.raw);
+      }
     });
 
     return new Promise((resolve) => {
@@ -101,15 +108,27 @@ export class OpenClawChannel implements Channel {
     }
 
     const text = extractTextFromMessage(msg);
-    if (!text) {
+    const mediaItems = msg.item_list?.filter(i => i.type && i.type !== MessageItemType.TEXT) ?? [];
+
+    if (!text && mediaItems.length === 0) {
       respond(res, 400, { error: "Empty message" });
       return;
     }
 
-    if (msg.to_user_id) {
-      await this.ctx!.send(msg.to_user_id, "[openclaw] " + text);
-    } else {
-      await this.ctx!.notify("[openclaw] " + text);
+    // Text and media must be sent separately (WeChat limitation)
+    if (text) {
+      if (msg.to_user_id) {
+        await this.ctx!.send(msg.to_user_id, "[openclaw] " + text);
+      } else {
+        await this.ctx!.notify("[openclaw] " + text);
+      }
+    }
+    if (mediaItems.length > 0) {
+      if (msg.to_user_id) {
+        await this.ctx!.sendMedia(msg.to_user_id, mediaItems);
+      } else {
+        await this.ctx!.notifyMedia(mediaItems);
+      }
     }
 
     respond(res, 200, { ret: 0 });

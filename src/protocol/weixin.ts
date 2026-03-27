@@ -8,6 +8,7 @@ const BOT_TYPE = "3";
 const DEFAULT_API_TIMEOUT_MS = 30_000;
 const DEFAULT_LONG_POLL_TIMEOUT_MS = 35_000;
 const QR_POLL_TIMEOUT_MS = 35_000;
+const CDN_BASE = "https://novac2c.cdn.weixin.qq.com/c2c/download";
 
 // ── Type Definitions ───────────────────────────────────────
 
@@ -30,14 +31,78 @@ export const MessageState = {
   FINISH: 2,
 } as const;
 
+export const UploadMediaType = {
+  IMAGE: 1,
+  VIDEO: 2,
+  FILE: 3,
+  VOICE: 4,
+} as const;
+
+// ── Media Types ────────────────────────────────────────────
+
+export interface CDNMedia {
+  encrypt_query_param?: string;
+  aes_key?: string;
+  encrypt_type?: number;
+}
+
 export interface TextItem {
   text?: string;
 }
 
+export interface ImageItem {
+  media?: CDNMedia;
+  thumb_media?: CDNMedia;
+  aeskey?: string;
+  url?: string;
+  mid_size?: number;
+  thumb_size?: number;
+  thumb_height?: number;
+  thumb_width?: number;
+  hd_size?: number;
+}
+
+export interface VoiceItem {
+  media?: CDNMedia;
+  encode_type?: number;
+  bits_per_sample?: number;
+  sample_rate?: number;
+  playtime?: number;
+  text?: string;
+}
+
+export interface FileItem {
+  media?: CDNMedia;
+  file_name?: string;
+  md5?: string;
+  len?: string;
+}
+
+export interface VideoItem {
+  media?: CDNMedia;
+  thumb_media?: CDNMedia;
+  video_size?: number;
+  play_length?: number;
+  video_md5?: string;
+  thumb_size?: number;
+  thumb_height?: number;
+  thumb_width?: number;
+}
+
+// ── Message Structures ─────────────────────────────────────
+
 export interface MessageItem {
   type?: number;
   text_item?: TextItem;
+  image_item?: ImageItem;
+  voice_item?: VoiceItem;
+  file_item?: FileItem;
+  video_item?: VideoItem;
   ref_msg?: { title?: string; message_item?: MessageItem };
+  create_time_ms?: number;
+  update_time_ms?: number;
+  is_completed?: boolean;
+  msg_id?: string;
 }
 
 export interface WeixinMessage {
@@ -47,7 +112,10 @@ export interface WeixinMessage {
   to_user_id?: string;
   client_id?: string;
   create_time_ms?: number;
+  update_time_ms?: number;
+  delete_time_ms?: number;
   session_id?: string;
+  group_id?: string;
   message_type?: number;
   message_state?: number;
   item_list?: MessageItem[];
@@ -83,9 +151,12 @@ export interface LoginCredentials {
   userId?: string;
 }
 
+export type MediaType = "image" | "voice" | "video" | "file";
+
 export interface IncomingMessage {
   userId: string;
   text: string;
+  mediaType?: MediaType;
   raw: WeixinMessage;
 }
 
@@ -130,7 +201,7 @@ function buildHeaders(token?: string): Record<string, string> {
   return headers;
 }
 
-async function apiPost<T>(
+function apiPost<T>(
   baseUrl: string,
   endpoint: string,
   body: Record<string, unknown>,
@@ -165,7 +236,13 @@ async function apiPost<T>(
   }, endpoint);
 }
 
-// ── Exported Protocol Functions ────────────────────────────
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+// ── Auth Functions ─────────────────────────────────────────
 
 export async function fetchQRCode(): Promise<QRCodeResponse> {
   return withRetry(async () => {
@@ -199,6 +276,8 @@ export async function pollQRStatus(qrcodeStr: string): Promise<QRStatusResponse>
   }, "pollQRStatus");
 }
 
+// ── Messaging Functions ────────────────────────────────────
+
 export async function getUpdates(
   baseUrl: string,
   token: string,
@@ -221,18 +300,14 @@ export async function getUpdates(
   }
 }
 
-export async function sendTextMessage(
+export async function sendMessage(
   baseUrl: string,
   token: string,
   to: string,
-  text: string,
+  items: MessageItem[],
   contextToken?: string,
 ): Promise<void> {
   const clientId = `bot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const items: MessageItem[] = text
-    ? [{ type: MessageItemType.TEXT, text_item: { text } }]
-    : [];
-
   await apiPost(
     baseUrl,
     "ilink/bot/sendmessage",
@@ -251,6 +326,21 @@ export async function sendTextMessage(
   );
 }
 
+export async function sendTextMessage(
+  baseUrl: string,
+  token: string,
+  to: string,
+  text: string,
+  contextToken?: string,
+): Promise<void> {
+  const items: MessageItem[] = text
+    ? [{ type: MessageItemType.TEXT, text_item: { text } }]
+    : [];
+  await sendMessage(baseUrl, token, to, items, contextToken);
+}
+
+// ── Message Parsing ────────────────────────────────────────
+
 export function extractTextFromMessage(msg: WeixinMessage): string {
   const items = msg.item_list;
   if (!items?.length) return "";
@@ -266,4 +356,169 @@ export function extractTextFromMessage(msg: WeixinMessage): string {
     }
   }
   return "";
+}
+
+export function extractMessageSummary(msg: WeixinMessage): {
+  text: string;
+  mediaType?: MediaType;
+} {
+  const items = msg.item_list;
+  if (!items?.length) return { text: "" };
+
+  for (const item of items) {
+    switch (item.type) {
+      case MessageItemType.TEXT:
+        return { text: extractTextFromMessage(msg) };
+
+      case MessageItemType.VOICE: {
+        const v = item.voice_item;
+        const stt = v?.text?.trim();
+        const dur = v?.playtime ? `${Math.round(v.playtime / 1000)}s` : "";
+        return {
+          text: stt || `[语音${dur ? " " + dur : ""}]`,
+          mediaType: "voice",
+        };
+      }
+
+      case MessageItemType.IMAGE: {
+        const img = item.image_item;
+        const dim = img?.thumb_width && img?.thumb_height
+          ? ` ${img.thumb_width}x${img.thumb_height}` : "";
+        return { text: `[图片${dim}]`, mediaType: "image" };
+      }
+
+      case MessageItemType.FILE: {
+        const f = item.file_item;
+        const name = f?.file_name || "未知文件";
+        const size = f?.len ? ` ${formatSize(parseInt(f.len, 10))}` : "";
+        return { text: `[文件: ${name}${size}]`, mediaType: "file" };
+      }
+
+      case MessageItemType.VIDEO: {
+        const v = item.video_item;
+        const dur = v?.play_length ? ` ${v.play_length}s` : "";
+        return { text: `[视频${dur}]`, mediaType: "video" };
+      }
+    }
+  }
+  return { text: "" };
+}
+
+// ── CDN Media Operations ───────────────────────────────────
+
+export function decodeAesKey(base64Key: string): Buffer {
+  const decoded = Buffer.from(base64Key, "base64");
+  if (decoded.length === 16) return decoded;
+  const hex = decoded.toString("utf-8");
+  if (hex.length === 32) return Buffer.from(hex, "hex");
+  throw new Error("Invalid AES key format");
+}
+
+export async function downloadMedia(cdnMedia: CDNMedia): Promise<Buffer> {
+  const param = cdnMedia.encrypt_query_param;
+  if (!param) throw new Error("Missing encrypt_query_param");
+  const aesKeyStr = cdnMedia.aes_key;
+  if (!aesKeyStr) throw new Error("Missing aes_key");
+
+  const url = `${CDN_BASE}?encrypted_query_param=${encodeURIComponent(param)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`CDN download failed: ${res.status}`);
+  const encrypted = Buffer.from(await res.arrayBuffer());
+
+  const key = decodeAesKey(aesKeyStr);
+  const decipher = crypto.createDecipheriv("aes-128-ecb", key, null);
+  decipher.setAutoPadding(true);
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]);
+}
+
+export interface UploadResult {
+  cdnMedia: CDNMedia;
+  thumbCdnMedia?: CDNMedia;
+}
+
+export async function uploadMedia(
+  baseUrl: string,
+  token: string,
+  file: Buffer,
+  mediaType: number,
+  toUser?: string,
+  options?: { thumb?: Buffer },
+): Promise<UploadResult> {
+  const aesKey = crypto.randomBytes(16);
+  const aesKeyHex = aesKey.toString("hex");
+  const filekey = crypto.randomBytes(16).toString("hex");
+
+  const rawMd5 = crypto.createHash("md5").update(file).digest("hex");
+  const cipher = crypto.createCipheriv("aes-128-ecb", aesKey, null);
+  const encrypted = Buffer.concat([cipher.update(file), cipher.final()]);
+
+  // 1. Get upload URL
+  const uploadReq: Record<string, unknown> = {
+    filekey,
+    media_type: mediaType,
+    to_user_id: toUser,
+    rawsize: file.length,
+    filesize: encrypted.length,
+    rawfilemd5: rawMd5,
+    aeskey: aesKeyHex,
+    no_need_thumb: !options?.thumb,
+  };
+  if (options?.thumb) {
+    const thumbMd5 = crypto.createHash("md5").update(options.thumb).digest("hex");
+    const tc = crypto.createCipheriv("aes-128-ecb", aesKey, null);
+    const thumbEncrypted = Buffer.concat([tc.update(options.thumb), tc.final()]);
+    uploadReq.thumb_rawsize = options.thumb.length;
+    uploadReq.thumb_filesize = thumbEncrypted.length;
+    uploadReq.thumb_rawfilemd5 = thumbMd5;
+  }
+
+  const uploadResp = await apiPost<{ upload_param?: string; thumb_upload_param?: string }>(
+    baseUrl, "ilink/bot/getuploadurl", uploadReq, token,
+  );
+  if (!uploadResp.upload_param) {
+    throw new Error("getuploadurl failed: no upload_param");
+  }
+
+  // 2. Upload encrypted file to CDN
+  const cdnUploadUrl = `${CDN_BASE.replace("/download", "/upload")}?encrypted_query_param=${encodeURIComponent(uploadResp.upload_param)}&filekey=${encodeURIComponent(filekey)}`;
+  const cdnRes = await fetch(cdnUploadUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: new Uint8Array(encrypted),
+  });
+  if (!cdnRes.ok) {
+    const errMsg = cdnRes.headers.get("x-error-message") || await cdnRes.text();
+    throw new Error(`CDN upload failed: ${cdnRes.status} ${errMsg}`);
+  }
+
+  const downloadParam = cdnRes.headers.get("x-encrypted-param");
+  if (!downloadParam) {
+    throw new Error("CDN upload succeeded but missing x-encrypted-param header");
+  }
+
+  const aesKeyBase64 = Buffer.from(aesKeyHex).toString("base64");
+
+  // 3. Upload thumbnail if provided
+  let thumbCdnMedia: CDNMedia | undefined;
+  if (options?.thumb && uploadResp.thumb_upload_param) {
+    const tc = crypto.createCipheriv("aes-128-ecb", aesKey, null);
+    const thumbEncrypted = Buffer.concat([tc.update(options.thumb), tc.final()]);
+    const thumbUrl = `${CDN_BASE.replace("/download", "/upload")}?encrypted_query_param=${encodeURIComponent(uploadResp.thumb_upload_param)}&filekey=${encodeURIComponent(filekey)}`;
+    const thumbRes = await fetch(thumbUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: new Uint8Array(thumbEncrypted),
+    });
+    if (thumbRes.ok) {
+      const thumbDownloadParam = thumbRes.headers.get("x-encrypted-param");
+      if (thumbDownloadParam) {
+        thumbCdnMedia = { encrypt_query_param: thumbDownloadParam, aes_key: aesKeyBase64 };
+      }
+    }
+  }
+
+  return {
+    cdnMedia: { encrypt_query_param: downloadParam, aes_key: aesKeyBase64 },
+    thumbCdnMedia,
+  };
 }

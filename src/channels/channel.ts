@@ -1,3 +1,5 @@
+import type { MessageItem, CDNMedia, IncomingMessage } from "../protocol/weixin.js";
+
 export interface LogEntry {
   timestamp: number;
   source: string;
@@ -16,10 +18,23 @@ export type CommandHandler = (userId: string, args: string) => Promise<string | 
 export type MessageHandler = (userId: string, text: string) => Promise<string | void>;
 
 export interface ChannelContext {
+  // Text messaging
   send(userId: string, text: string): Promise<void>;
   notify(text: string): Promise<void>;
+
+  // Media messaging (text and media must be sent separately per WeChat limitation)
+  sendMedia(userId: string, items: MessageItem[]): Promise<void>;
+  notifyMedia(items: MessageItem[]): Promise<void>;
+
+  // CDN download
+  downloadMedia(cdnMedia: CDNMedia): Promise<Buffer>;
+
+  // Handler registration
   onCommand(cmd: string, handler: CommandHandler): void;
   onDefault(handler: MessageHandler): void;
+  onMessage(handler: (msg: IncomingMessage) => void): void;
+
+  // Observability
   debug(detail: string): void;
   onLog(handler: (entry: LogEntry) => void): void;
   onDebug(handler: (entry: DebugEntry) => void): void;

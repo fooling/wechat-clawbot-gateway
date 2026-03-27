@@ -7,13 +7,17 @@ import {
   pollQRStatus,
   getUpdates,
   sendTextMessage,
-  extractTextFromMessage,
+  sendMessage,
+  extractMessageSummary,
+  downloadMedia as cdnDownload,
   MessageType,
 } from "../protocol/weixin.js";
 import type {
   LoginCredentials,
   IncomingMessage,
   WeixinMessage,
+  MessageItem,
+  CDNMedia,
 } from "../protocol/weixin.js";
 
 const MAX_QR_REFRESH = 3;
@@ -117,6 +121,22 @@ export class WxClient extends EventEmitter {
     );
   }
 
+  async sendMedia(userId: string, items: MessageItem[]): Promise<void> {
+    if (!this.credentials) throw new Error("Not logged in");
+    const contextToken = this.contextTokens.get(userId);
+    await sendMessage(
+      this.credentials.baseUrl,
+      this.credentials.token,
+      userId,
+      items,
+      contextToken,
+    );
+  }
+
+  async downloadMedia(cdnMedia: CDNMedia): Promise<Buffer> {
+    return cdnDownload(cdnMedia);
+  }
+
   stop(): void {
     this.running = false;
   }
@@ -188,10 +208,10 @@ export class WxClient extends EventEmitter {
       this.contextTokens.set(fromUser, msg.context_token);
     }
 
-    const text = extractTextFromMessage(msg);
+    const { text, mediaType } = extractMessageSummary(msg);
     if (!text.trim()) return;
 
-    const incoming: IncomingMessage = { userId: fromUser, text, raw: msg };
+    const incoming: IncomingMessage = { userId: fromUser, text, mediaType, raw: msg };
     this.emit("message", incoming);
   }
 

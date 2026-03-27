@@ -11,7 +11,7 @@ import type {
   LogEntry,
   DebugEntry,
 } from "../channels/channel.js";
-import type { IncomingMessage } from "../protocol/weixin.js";
+import type { IncomingMessage, MessageItem, CDNMedia } from "../protocol/weixin.js";
 
 export class Gateway extends EventEmitter {
   private wxClient: WxClient;
@@ -91,6 +91,24 @@ export class Gateway extends EventEmitter {
         }
         this.defaultHandler = { channel: channelName, handler };
       },
+      sendMedia: async (userId: string, items: MessageItem[]) => {
+        this.emitLog("out", channelName, userId, "[media]");
+        await this.wxClient.sendMedia(userId, items);
+      },
+      notifyMedia: async (items: MessageItem[]) => {
+        if (!this.notifyUser) {
+          this.emitDebug(channelName, "notify_user not set, media dropped");
+          return;
+        }
+        this.emitLog("out", channelName, this.notifyUser, "[media]");
+        await this.wxClient.sendMedia(this.notifyUser, items);
+      },
+      downloadMedia: async (cdnMedia: CDNMedia) => {
+        return this.wxClient.downloadMedia(cdnMedia);
+      },
+      onMessage: (handler: (msg: IncomingMessage) => void) => {
+        this.on("message", handler);
+      },
       debug: (detail: string) => {
         this.emitDebug(channelName, detail);
       },
@@ -107,6 +125,7 @@ export class Gateway extends EventEmitter {
     const { userId, text } = msg;
 
     this.emitLog("in", "wx", userId, text);
+    this.emit("message", msg);
 
     // Auto-capture notify user and persist
     if (!this.notifyUser) {
