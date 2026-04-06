@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import type { WxClient } from "./wx-client.js";
+import type { WxClient, SessionMetrics } from "./wx-client.js";
 import type { GatewayConfig } from "../config.js";
 import type {
   Channel,
@@ -136,9 +136,18 @@ export class Gateway extends EventEmitter {
       this.emitDebug("gateway", `notify_user auto-captured: ${userId}`);
     }
 
+    // Built-in: /heartbeat — session health report
+    if (text === "/heartbeat") {
+      const reply = this.formatSessionReport(this.wxClient.getSessionMetrics());
+      this.emitLog("out", "gateway", userId, "[heartbeat report]");
+      await this.wxClient.send(userId, reply);
+      return;
+    }
+
     // Help: /? lists all commands, /cmd? shows help for specific command
     if (text === "/?") {
       const lines = ["可用命令:"];
+      lines.push("  /heartbeat — 会话健康报告");
       for (const [cmd, entry] of this.commandHandlers) {
         lines.push(`  /${cmd} — ${entry.help || entry.channel}`);
       }
@@ -150,10 +159,12 @@ export class Gateway extends EventEmitter {
     }
     if (text.startsWith("/") && text.endsWith("?") && text.length > 2) {
       const cmd = text.slice(1, -1);
+      const builtinHelp: Record<string, string> = {
+        heartbeat: "/heartbeat — 会话健康报告 (心跳探针、长轮询、运行时间)",
+      };
       const entry = this.commandHandlers.get(cmd);
-      const reply = entry
-        ? `/${cmd} — ${entry.help || "无详细说明"}`
-        : `未知命令: /${cmd}\n输入 /? 查看所有可用命令`;
+      const reply = builtinHelp[cmd]
+        ?? (entry ? `/${cmd} — ${entry.help || "无详细说明"}` : `未知命令: /${cmd}\n输入 /? 查看所有可用命令`);
       this.emitLog("out", "gateway", userId, reply);
       await this.wxClient.send(userId, reply);
       return;
@@ -212,6 +223,36 @@ export class Gateway extends EventEmitter {
     }
   }
 
+  private formatSessionReport(m: SessionMetrics): string {
+    const now = Date.now();
+    const uptime = m.loginTime ? formatDuration(now - m.loginTime) : "未登录";
+    const lastHb = m.lastHeartbeatTime ? formatAgo(now - m.lastHeartbeatTime) : "尚无";
+    const lastPoll = m.lastPollTime ? formatAgo(now - m.lastPollTime) : "尚无";
+    const hbHealth = m.heartbeatTotal
+      ? `${((m.heartbeatOk / m.heartbeatTotal) * 100).toFixed(1)}%`
+      : "N/A";
+    const pollHealth = m.pollTotal
+      ? `${(((m.pollTotal - m.pollErrors) / m.pollTotal) * 100).toFixed(1)}%`
+      : "N/A";
+
+    return [
+      "── 会话健康报告 ──",
+      "",
+      `运行时间: ${uptime}`,
+      `收到消息: ${m.messagesReceived}`,
+      "",
+      "心跳探针 (getconfig):",
+      `  总计: ${m.heartbeatTotal}  成功率: ${hbHealth}`,
+      `  成功: ${m.heartbeatOk}  失败: ${m.heartbeatFail}  过期: ${m.heartbeatExpired}`,
+      `  上次: ${lastHb}  状态: ${m.lastHeartbeatOk ? "OK" : "FAIL"}`,
+      "",
+      "长轮询 (getupdates):",
+      `  总计: ${m.pollTotal}  成功率: ${pollHealth}`,
+      `  错误: ${m.pollErrors}  过期(-14): ${m.pollSessionExpired}`,
+      `  上次成功: ${lastPoll}`,
+    ].join("\n");
+  }
+
   private emitLog(direction: "in" | "out", source: string, userId: string, text: string): void {
     this.emit("log", {
       timestamp: Date.now(),
@@ -229,4 +270,22 @@ export class Gateway extends EventEmitter {
       detail,
     } satisfies DebugEntry);
   }
+}
+
+function formatDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const parts: string[] = [];
+  if (d) parts.push(`${d}天`);
+  if (h) parts.push(`${h}时`);
+  parts.push(`${m}分`);
+  return parts.join("");
+}
+
+function formatAgo(ms: number): string {
+  if (ms < 60_000) return `${Math.floor(ms / 1000)}秒前`;
+  if (ms < 3600_000) return `${Math.floor(ms / 60_000)}分钟前`;
+  return `${Math.floor(ms / 3600_000)}小时前`;
 }

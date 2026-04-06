@@ -10,6 +10,7 @@ import {
   sendMessage,
   extractMessageSummary,
   downloadMedia as cdnDownload,
+  checkSession,
   MessageType,
 } from "../protocol/weixin.js";
 import type {
@@ -25,6 +26,23 @@ const LOGIN_DEADLINE_MS = 8 * 60_000;
 const MAX_CONSECUTIVE_FAILURES = 5;
 const BACKOFF_DELAY_MS = 30_000;
 const RETRY_DELAY_MS = 2_000;
+const SESSION_EXPIRED_ERRCODE = -14;
+const HEARTBEAT_INTERVAL_MS = 5 * 60_000; // 5 min keepalive
+
+export interface SessionMetrics {
+  loginTime: number;
+  heartbeatTotal: number;
+  heartbeatOk: number;
+  heartbeatFail: number;
+  heartbeatExpired: number;
+  lastHeartbeatTime: number;
+  lastHeartbeatOk: boolean;
+  pollTotal: number;
+  pollErrors: number;
+  pollSessionExpired: number;
+  lastPollTime: number;
+  messagesReceived: number;
+}
 
 export interface WxClientOptions {
   credentialsPath: string;
@@ -36,6 +54,14 @@ export class WxClient extends EventEmitter {
   private getUpdatesBuf = "";
   private contextTokens = new Map<string, string>();
   private credentialsPath: string;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private metrics: SessionMetrics = {
+    loginTime: 0,
+    heartbeatTotal: 0, heartbeatOk: 0, heartbeatFail: 0, heartbeatExpired: 0,
+    lastHeartbeatTime: 0, lastHeartbeatOk: true,
+    pollTotal: 0, pollErrors: 0, pollSessionExpired: 0,
+    lastPollTime: 0, messagesReceived: 0,
+  };
 
   constructor(options: WxClientOptions) {
     super();
@@ -48,6 +74,7 @@ export class WxClient extends EventEmitter {
     const saved = this.loadCredentials();
     if (saved) {
       this.credentials = saved;
+      this.metrics.loginTime = Date.now();
       console.log(`[wx] Using saved credentials (accountId=${saved.accountId})`);
       this.emit("ready");
       return;
@@ -90,6 +117,7 @@ export class WxClient extends EventEmitter {
           };
           this.saveCredentials(creds);
           this.credentials = creds;
+          this.metrics.loginTime = Date.now();
           console.log(`[wx] Login success! accountId=${creds.accountId}`);
           this.emit("ready");
           return;
@@ -107,6 +135,7 @@ export class WxClient extends EventEmitter {
     this.pollLoop().catch((err) => {
       this.emit("error", err);
     });
+    this.startHeartbeat();
   }
 
   async send(userId: string, text: string): Promise<void> {
@@ -139,6 +168,14 @@ export class WxClient extends EventEmitter {
 
   stop(): void {
     this.running = false;
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  getSessionMetrics(): SessionMetrics {
+    return { ...this.metrics };
   }
 
   clearCredentials(): void {
@@ -151,21 +188,64 @@ export class WxClient extends EventEmitter {
 
   // ── Internal ───────────────────────────────────────────
 
-  private async pollLoop(): Promise<void> {
-    if (!this.credentials) throw new Error("Not logged in");
+  private startHeartbeat(): void {
+    this.heartbeatTimer = setInterval(() => {
+      this.heartbeat().catch((err) => {
+        console.error(`[wx] Heartbeat error: ${err}`);
+      });
+    }, HEARTBEAT_INTERVAL_MS);
+  }
 
+  private async heartbeat(): Promise<void> {
+    if (!this.credentials) return;
+    this.metrics.heartbeatTotal++;
+    this.metrics.lastHeartbeatTime = Date.now();
+    try {
+      const resp = await checkSession(this.credentials.baseUrl, this.credentials.token);
+      if (resp.errcode === SESSION_EXPIRED_ERRCODE) {
+        this.metrics.heartbeatExpired++;
+        this.metrics.lastHeartbeatOk = false;
+        console.error(`[wx] Heartbeat: session expired (errcode ${resp.errcode}, errmsg=${resp.errmsg})`);
+        this.emit("sessionExpired");
+      } else {
+        this.metrics.heartbeatOk++;
+        this.metrics.lastHeartbeatOk = true;
+      }
+    } catch {
+      this.metrics.heartbeatFail++;
+      this.metrics.lastHeartbeatOk = false;
+    }
+  }
+
+  private async pollLoop(): Promise<void> {
     let failures = 0;
 
     while (this.running) {
+      if (!this.credentials) {
+        await sleep(RETRY_DELAY_MS);
+        continue;
+      }
+      const { baseUrl, token } = this.credentials;
+
       try {
+        this.metrics.pollTotal++;
         const resp = await getUpdates(
-          this.credentials.baseUrl,
-          this.credentials.token,
+          baseUrl,
+          token,
           this.getUpdatesBuf,
         );
 
         if (resp.ret !== undefined && resp.ret !== 0) {
+          if (resp.errcode === SESSION_EXPIRED_ERRCODE) {
+            this.metrics.pollSessionExpired++;
+            console.error("[wx] Session expired (errcode -14), retrying with existing credentials...");
+            this.emit("sessionExpired");
+            await sleep(BACKOFF_DELAY_MS);
+            continue;
+          }
+
           failures++;
+          this.metrics.pollErrors++;
           console.error(`[wx] getUpdates error: ret=${resp.ret} errcode=${resp.errcode} errmsg=${resp.errmsg}`);
           if (failures >= MAX_CONSECUTIVE_FAILURES) {
             failures = 0;
@@ -177,16 +257,20 @@ export class WxClient extends EventEmitter {
         }
 
         failures = 0;
+        this.metrics.lastPollTime = Date.now();
 
         if (resp.get_updates_buf) {
           this.getUpdatesBuf = resp.get_updates_buf;
         }
 
-        for (const msg of resp.msgs ?? []) {
+        const msgs = resp.msgs ?? [];
+        this.metrics.messagesReceived += msgs.length;
+        for (const msg of msgs) {
           this.processMessage(msg);
         }
       } catch (err) {
         failures++;
+        this.metrics.pollErrors++;
         console.error(`[wx] Poll error: ${err}`);
         if (failures >= MAX_CONSECUTIVE_FAILURES) {
           failures = 0;

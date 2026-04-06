@@ -376,6 +376,15 @@ export async function sendTextMessage(
   await sendMessage(baseUrl, token, to, items, contextToken);
 }
 
+// ── Session Health ─────────────────────────────────────
+
+export async function checkSession(
+  baseUrl: string,
+  token: string,
+): Promise<{ ret?: number; errcode?: number; errmsg?: string }> {
+  return apiPost(baseUrl, "ilink/bot/getconfig", {}, token);
+}
+
 // ── Message Parsing ────────────────────────────────────────
 
 export function extractTextFromMessage(msg: WeixinMessage): string {
