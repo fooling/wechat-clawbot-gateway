@@ -79,9 +79,26 @@ export class ExecChannel implements Channel {
         // Build template vars: base fields + JSON-parsed stdout fields
         const vars: Record<string, string | number> = { stdout, stderr, args: actualArgs, code };
         try {
-          const json = JSON.parse(stdout) as Record<string, unknown>;
-          for (const [k, v] of Object.entries(json)) {
-            if (!(k in vars)) vars[k] = v == null ? "" : String(v);
+          // Try full stdout first; if it fails, extract the first JSON array/object
+          let jsonStr = stdout;
+          try { JSON.parse(jsonStr); } catch {
+            const match = stdout.match(/(\[[\s\S]*\]|\{[\s\S]*\})\s*$/);
+            if (match) jsonStr = match[1];
+          }
+          const json = JSON.parse(jsonStr) as unknown;
+          if (Array.isArray(json) && action.item_template) {
+            const sep = action.item_separator ?? "\n";
+            vars.items = json.map((item: Record<string, unknown>) => {
+              const itemVars: Record<string, string | number> = {};
+              for (const [k, v] of Object.entries(item)) {
+                itemVars[k] = Array.isArray(v) ? v.join(", ") : v == null ? "" : String(v);
+              }
+              return renderTemplate(action.item_template!, itemVars);
+            }).join(sep);
+          } else if (json && typeof json === "object" && !Array.isArray(json)) {
+            for (const [k, v] of Object.entries(json as Record<string, unknown>)) {
+              if (!(k in vars)) vars[k] = v == null ? "" : String(v);
+            }
           }
         } catch {
           // Not JSON — only {{stdout}} available

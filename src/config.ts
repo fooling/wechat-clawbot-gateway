@@ -64,6 +64,8 @@ export interface ExecActionConfig {
   command: string;
   template?: string;
   template_file?: string;
+  item_template?: string;
+  item_separator?: string;
 }
 
 export interface ExecCommandConfig {
