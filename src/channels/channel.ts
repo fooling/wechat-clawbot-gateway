@@ -29,6 +29,10 @@ export interface ChannelContext {
   // CDN download
   downloadMedia(cdnMedia: CDNMedia): Promise<Buffer>;
 
+  // Upload a raw image buffer to WeChat CDN and return a MessageItem
+  // ready for sendMedia/notifyMedia
+  uploadImage(buffer: Buffer): Promise<MessageItem>;
+
   // Handler registration
   onCommand(cmd: string, handler: CommandHandler, help?: string): void;
   onDefault(handler: MessageHandler): void;

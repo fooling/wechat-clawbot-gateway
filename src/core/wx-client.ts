@@ -10,8 +10,11 @@ import {
   sendMessage,
   extractMessageSummary,
   downloadMedia as cdnDownload,
+  uploadMedia as cdnUpload,
   checkSession,
   MessageType,
+  MessageItemType,
+  UploadMediaType,
 } from "../protocol/weixin.js";
 import type {
   LoginCredentials,
@@ -164,6 +167,24 @@ export class WxClient extends EventEmitter {
 
   async downloadMedia(cdnMedia: CDNMedia): Promise<Buffer> {
     return cdnDownload(cdnMedia);
+  }
+
+  async uploadImage(buffer: Buffer, toUser?: string): Promise<MessageItem> {
+    if (!this.credentials) throw new Error("Not logged in");
+    const { cdnMedia, encryptedSize } = await cdnUpload(
+      this.credentials.baseUrl,
+      this.credentials.token,
+      buffer,
+      UploadMediaType.IMAGE,
+      toUser,
+    );
+    return {
+      type: MessageItemType.IMAGE,
+      image_item: {
+        media: { ...cdnMedia, encrypt_type: 1 },
+        mid_size: encryptedSize,
+      },
+    };
   }
 
   stop(): void {

@@ -108,6 +108,9 @@ export class Gateway extends EventEmitter {
       downloadMedia: async (cdnMedia: CDNMedia) => {
         return this.wxClient.downloadMedia(cdnMedia);
       },
+      uploadImage: async (buffer: Buffer) => {
+        return this.wxClient.uploadImage(buffer, this.notifyUser || undefined);
+      },
       onMessage: (handler: (msg: IncomingMessage) => void) => {
         this.on("message", handler);
       },

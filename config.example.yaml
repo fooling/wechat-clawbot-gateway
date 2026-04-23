@@ -23,6 +23,18 @@ channels:
       # Transmission 下载完成回调
       transmission:
         template: "任务 {{name}} 下载完成（{{size}}）"
+      # 通用图片接入（AgentDVR/Frigate/HA camera snapshot/自定义脚本都可用）
+      # 自动识别 Content-Type:
+      #   multipart/form-data → 所有 file 字段
+      #   image/* → 单张原始二进制
+      #   application/json → { images: [base64...] }
+      snapshots:
+        template: "🔔 {{event}} @ {{camera}}"   # 可选 caption，query/body 变量
+        images:
+          layout: grid        # grid | horizontal | vertical
+          max_columns: 2
+          max_count: 16
+          max_bytes_per_image: 10485760
 
   mqtt:
     enabled: false

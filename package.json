@@ -18,6 +18,10 @@
     "silk-wasm": "^3.7.1",
     "yaml": "^2.7.0"
   },
+  "optionalDependencies": {
+    "sharp": "^0.33.0",
+    "busboy": "^1.6.0"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/qrcode-terminal": "^0.12.2",

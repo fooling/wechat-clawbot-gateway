@@ -12,8 +12,16 @@ export interface WechatConfig {
 
 // ── Channel Configs ────────────────────────────────────
 
+export interface WebhookImagesConfig {
+  layout?: "grid" | "horizontal" | "vertical";
+  max_columns?: number;
+  max_count?: number;
+  max_bytes_per_image?: number;
+}
+
 export interface WebhookEndpointConfig {
-  template: string;
+  template?: string;
+  images?: WebhookImagesConfig;
 }
 
 export interface WebhookConfig {

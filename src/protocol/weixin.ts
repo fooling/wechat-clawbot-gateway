@@ -480,6 +480,7 @@ export async function downloadMedia(cdnMedia: CDNMedia): Promise<Buffer> {
 export interface UploadResult {
   cdnMedia: CDNMedia;
   thumbCdnMedia?: CDNMedia;
+  encryptedSize: number;    // AES-PKCS7 padding 后大小，ImageItem.mid_size 要用这个
 }
 
 export async function uploadMedia(
@@ -522,15 +523,26 @@ export async function uploadMedia(
     uploadReq.thumb_rawfilemd5 = thumbMd5;
   }
 
-  const uploadResp = await apiPost<{ upload_param?: string; thumb_upload_param?: string }>(
-    baseUrl, "ilink/bot/getuploadurl", uploadReq, token,
-  );
-  if (!uploadResp.upload_param) {
-    throw new Error("getuploadurl failed: no upload_param");
+  const uploadResp = await apiPost<{
+    upload_param?: string;
+    upload_full_url?: string;
+    thumb_upload_param?: string;
+    thumb_upload_full_url?: string;
+    ret?: number;
+    errcode?: number;
+    errmsg?: string;
+  }>(baseUrl, "ilink/bot/getuploadurl", uploadReq, token);
+
+  // iLink 新版 API 返回 upload_full_url（完整 URL + taskid）；老版本返回 upload_param 由客户端拼 URL
+  const cdnUploadUrl = uploadResp.upload_full_url
+    ?? (uploadResp.upload_param
+      ? `${CDN_UPLOAD}?encrypted_query_param=${encodeURIComponent(uploadResp.upload_param)}&filekey=${encodeURIComponent(filekey)}`
+      : null);
+  if (!cdnUploadUrl) {
+    throw new Error(`getuploadurl failed: ${JSON.stringify(uploadResp)}`);
   }
 
   // 2. Upload encrypted file to CDN
-  const cdnUploadUrl = `${CDN_UPLOAD}?encrypted_query_param=${encodeURIComponent(uploadResp.upload_param)}&filekey=${encodeURIComponent(filekey)}`;
   const cdnRes = await fetch(cdnUploadUrl, {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream" },
@@ -541,28 +553,37 @@ export async function uploadMedia(
     throw new Error(`CDN upload failed: ${cdnRes.status} ${errMsg}`);
   }
 
-  // x-encrypted-query-param is the correct header for download compatibility
-  // x-encrypted-param exists but uses URL-safe base64 which fails on download (400)
-  // Fallback to upload_param which also works for download
-  const downloadParam = cdnRes.headers.get("x-encrypted-query-param")
-    ?? uploadResp.upload_param;
+  // 参考 photon-hq/wechat-ilink-client：当前 iLink API 只返回 x-encrypted-param，这就是 downloadParam
+  // 老的 x-encrypted-query-param 在新版 API 下不再返回；upload_full_url 里的 param 是给上传用的
+  const downloadParam = cdnRes.headers.get("x-encrypted-param")
+    ?? cdnRes.headers.get("x-encrypted-query-param")
+    ?? uploadResp.upload_param
+    ?? (uploadResp.upload_full_url ? new URL(uploadResp.upload_full_url).searchParams.get("encrypted_query_param") : null)
+    ?? undefined;
 
   const aesKeyBase64 = Buffer.from(aesKeyHex).toString("base64");
 
   // 3. Upload thumbnail if provided
   let thumbCdnMedia: CDNMedia | undefined;
-  if (options?.thumb && uploadResp.thumb_upload_param) {
+  const thumbUploadUrl = options?.thumb
+    ? (uploadResp.thumb_upload_full_url
+      ?? (uploadResp.thumb_upload_param
+        ? `${CDN_UPLOAD}?encrypted_query_param=${encodeURIComponent(uploadResp.thumb_upload_param)}&filekey=${encodeURIComponent(filekey)}`
+        : null))
+    : null;
+  if (options?.thumb && thumbUploadUrl) {
     const tc = crypto.createCipheriv("aes-128-ecb", aesKey, null);
     const thumbEncrypted = Buffer.concat([tc.update(options.thumb), tc.final()]);
-    const thumbUrl = `${CDN_UPLOAD}?encrypted_query_param=${encodeURIComponent(uploadResp.thumb_upload_param)}&filekey=${encodeURIComponent(filekey)}`;
-    const thumbRes = await fetch(thumbUrl, {
+    const thumbRes = await fetch(thumbUploadUrl, {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream" },
       body: new Uint8Array(thumbEncrypted),
     });
     if (thumbRes.ok) {
       const thumbDownloadParam = thumbRes.headers.get("x-encrypted-query-param")
-        ?? uploadResp.thumb_upload_param;
+        ?? uploadResp.thumb_upload_param
+        ?? (uploadResp.thumb_upload_full_url ? new URL(uploadResp.thumb_upload_full_url).searchParams.get("encrypted_query_param") : null)
+        ?? undefined;
       if (thumbDownloadParam) {
         thumbCdnMedia = { encrypt_query_param: thumbDownloadParam, aes_key: aesKeyBase64 };
       }
@@ -572,5 +593,6 @@ export async function uploadMedia(
   return {
     cdnMedia: { encrypt_query_param: downloadParam, aes_key: aesKeyBase64 },
     thumbCdnMedia,
+    encryptedSize: encrypted.length,
   };
 }

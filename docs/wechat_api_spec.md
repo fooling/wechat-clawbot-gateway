@@ -225,7 +225,7 @@ GET /c2c/download?NFN4Z28yTzd2WkZQ... → 400
 
 完整的上传需要 3 步：getuploadurl → CDN POST → sendmessage。
 
-**实测验证（2026-03-27），完整成功。**
+**实测验证（2026-04-24）**：iLink 图片上传链路在 3 月初次跑通后，服务端 4 月有过不公开协议变更，下文已经反映新版实况（见各步骤的「⚠️ 协议更新」标注）。
 
 ### Step 1: getuploadurl — 获取上传参数
 
@@ -245,12 +245,19 @@ Content-Type: application/json
   "no_need_thumb": true                     // 不需要缩略图上传
 }
 
-→ 响应:
+→ 响应（新版，2026-04）:
 {
-  "upload_param": "UC1wVWEtOHJXXzhQ...",    // CDN 上传参数（base64）
-  "thumb_upload_param": "..."               // 缩略图上传参数（no_need_thumb=true 时无）
+  "upload_full_url": "https://novac2c.cdn.weixin.qq.com/c2c/upload?encrypted_query_param=...&filekey=...&taskid=..."
+}
+
+→ 响应（老版，已弃用）:
+{
+  "upload_param": "UC1wVWEtOHJXXzhQ...",
+  "thumb_upload_param": "..."
 }
 ```
+
+**⚠️ 协议更新（2026-04）**：服务端从单独返 `upload_param` 切换成返 **`upload_full_url`**（完整拼好的 URL，带新字段 `taskid`）。客户端应该直接把 `upload_full_url` 当 CDN POST 目标。兼容代码里两种都要处理；`taskid` 对客户端透明，不需要主动回传。
 
 **`media_type` 枚举（注意与 MessageItemType 不同）：**
 
@@ -274,16 +281,15 @@ POST https://novac2c.cdn.weixin.qq.com/c2c/upload
 Content-Type: application/octet-stream
 Body: {AES-128-ECB 加密后的文件 binary}
 
-→ 响应 Headers:
-  x-encrypted-param: C_k00QSN...            ← ⚠️ 不要用这个！
-  x-encrypted-query-param: U0J1R2dkTkcw...  ← ✅ 这个才是下载参数
+→ 响应 Headers（新版，2026-04）:
+  x-encrypted-param: ogACNtQ6fJxbhdAi...    ← ✅ 这就是 downloadParam
+
+→ 响应 Headers（老版）:
+  x-encrypted-param: C_k00QSN...            ← 老版下载会 400
+  x-encrypted-query-param: U0J1R2dkTkcw...  ← 老版才返这个
 ```
 
-**关键坑点：** CDN 上传响应返回**两个 header**：
-- `x-encrypted-param` — 格式不兼容下载端（URL-safe base64），用于下载会 400 ❌
-- `x-encrypted-query-param` — 标准 base64，与收到消息中的 `encrypt_query_param` 格式一致 ✅
-
-**备选方案：** `upload_param`（Step 1 返回的）也可以直接作为下载参数使用（实测可行）。
+**⚠️ 协议更新（2026-04）**：新版 CDN 响应**只返 `x-encrypted-param`**（不再返 `x-encrypted-query-param`），格式也变了——现在这个值就是可以直接填进 ImageItem 的 downloadParam。兼容代码里两个 header 都要尝试。
 
 ### Step 3: sendmessage — 发送图片消息
 
@@ -296,13 +302,12 @@ Body: {AES-128-ECB 加密后的文件 binary}
     "item_list": [{
       "type": 2,
       "image_item": {
-        "aeskey": "a182e4fe52ea1616b44aa9c80a60175a",
         "media": {
-          "encrypt_query_param": "U0J1R2dkTkcw...",
-          "aes_key": "YTE4MmU0ZmU1MmVhMTYxNmI0NGFhOWM4MGE2MDE3NWE="
+          "encrypt_query_param": "ogACNtQ6fJxbhdAi...",
+          "aes_key": "YTE4MmU0ZmU1MmVhMTYxNmI0NGFhOWM4MGE2MDE3NWE=",
+          "encrypt_type": 1
         },
-        "mid_size": 4368400,
-        "hd_size": 4368400
+        "mid_size": 4368400
       }
     }]
   }
@@ -313,10 +318,14 @@ Body: {AES-128-ECB 加密后的文件 binary}
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| `image_item.aeskey` | hex 字符串 | AES key 的 hex 编码（32 字符） |
-| `media.encrypt_query_param` | base64 字符串 | 来自 CDN 响应 `x-encrypted-query-param` header |
-| `media.aes_key` | base64(hex) 字符串 | 同一个 key，先 hex 编码再 base64 |
-| `mid_size` / `hd_size` | number | 加密后文件大小 |
+| `media.encrypt_query_param` | base64 字符串 | 来自 CDN 响应 `x-encrypted-param` header |
+| `media.aes_key` | base64(hex) 字符串 | AES key 先 hex 编码再 base64 |
+| `media.encrypt_type` | `1`（硬编码） | **⚠️ 必填**，缺了 WeChat 接单但客户端不显示图 |
+| `mid_size` | number | 加密后文件大小（PKCS7 padding 后） |
+
+**⚠️ 协议更新（2026-04）**：
+- `media.encrypt_type: 1` **必填**。之前按没这个字段的 payload 发，服务端 `sendmessage` 返 `{}` 成功但客户端收不到——最隐蔽的坑
+- **不要**设 `image_item.aeskey`（hex 顶层字段）、**不要**设 `hd_size`、**不要**设 `thumb_media` / `thumb_size` / `thumb_width` / `thumb_height`。photon-hq/wechat-ilink-client 的最简字段集只有上面 4 个
 
 ### 完整流程验证日志
 
