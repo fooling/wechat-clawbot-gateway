@@ -345,7 +345,7 @@ export async function sendMessage(
   if (!sanitized.length) return;
 
   const clientId = `bot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  await apiPost(
+  const resp = await apiPost<{ ret?: number; errcode?: number; errmsg?: string; [k: string]: unknown }>(
     baseUrl,
     "ilink/bot/sendmessage",
     {
@@ -361,6 +361,13 @@ export async function sendMessage(
     },
     token,
   );
+  // iLink 业务错误返回 HTTP 200 但 body 里 ret != 0；最常见 ret=-2（context_token 缺失/失效）
+  // 见 src/core/context-token-store.ts 注释
+  const ret = typeof resp?.ret === "number" ? resp.ret : undefined;
+  if (ret !== undefined && ret !== 0) {
+    const types = sanitized.map(i => i.type).join(",");
+    console.error(`[wx] sendMessage to=${to} types=[${types}] ret=${ret} errcode=${resp?.errcode ?? ""} errmsg=${resp?.errmsg ?? ""} body=${JSON.stringify(resp)}`);
+  }
 }
 
 export async function sendTextMessage(

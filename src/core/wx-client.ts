@@ -23,6 +23,7 @@ import type {
   MessageItem,
   CDNMedia,
 } from "../protocol/weixin.js";
+import { ContextTokenStore } from "./context-token-store.js";
 
 const MAX_QR_REFRESH = 3;
 const LOGIN_DEADLINE_MS = 8 * 60_000;
@@ -49,13 +50,14 @@ export interface SessionMetrics {
 
 export interface WxClientOptions {
   credentialsPath: string;
+  contextTokensPath: string;
 }
 
 export class WxClient extends EventEmitter {
   private credentials: LoginCredentials | null = null;
   private running = false;
   private getUpdatesBuf = "";
-  private contextTokens = new Map<string, string>();
+  private readonly contextTokens: ContextTokenStore;
   private credentialsPath: string;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private metrics: SessionMetrics = {
@@ -69,6 +71,10 @@ export class WxClient extends EventEmitter {
   constructor(options: WxClientOptions) {
     super();
     this.credentialsPath = path.resolve(options.credentialsPath);
+    this.contextTokens = new ContextTokenStore(options.contextTokensPath);
+    if (this.contextTokens.size > 0) {
+      console.log(`[wx] Loaded ${this.contextTokens.size} context_token(s) from ${this.contextTokens.path}`);
+    }
   }
 
   // ── Public API ─────────────────────────────────────────
@@ -144,6 +150,7 @@ export class WxClient extends EventEmitter {
   async send(userId: string, text: string): Promise<void> {
     if (!this.credentials) throw new Error("Not logged in");
     const contextToken = this.contextTokens.get(userId);
+    if (!contextToken) console.warn(`[wx] send to ${userId} WITHOUT context_token (push will likely silently fail with ret=-2)`);
     await sendTextMessage(
       this.credentials.baseUrl,
       this.credentials.token,
@@ -156,6 +163,7 @@ export class WxClient extends EventEmitter {
   async sendMedia(userId: string, items: MessageItem[]): Promise<void> {
     if (!this.credentials) throw new Error("Not logged in");
     const contextToken = this.contextTokens.get(userId);
+    if (!contextToken) console.warn(`[wx] sendMedia to ${userId} WITHOUT context_token (push will likely silently fail with ret=-2)`);
     await sendMessage(
       this.credentials.baseUrl,
       this.credentials.token,

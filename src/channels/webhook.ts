@@ -127,6 +127,7 @@ async function collectImagesFromRequest(
     try {
       const { files, fields } = await parseMultipart(req, maxCount, maxBytes);
       for (const [k, v] of Object.entries(fields)) data[k] = v;
+      ctx.debug(`multipart OK: files=${files.length} sizes=[${files.map(b => b.length).join(",")}] fields=${JSON.stringify(fields)}`);
       return { buffers: files.slice(0, maxCount) };
     } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code;
@@ -187,7 +188,8 @@ async function collectImagesFromRequest(
     return { buffers };
   }
 
-  return { buffers: [], error: { status: 415, msg: `unsupported content-type: ${contentType}` } };
+  ctx.debug(`415 rejected: method=${req.method} ct="${contentType}" content-length=${req.headers["content-length"] ?? "?"}`);
+  return { buffers: [], error: { status: 415, msg: `unsupported content-type: ${contentType || "(none)"}` } };
 }
 
 export class WebhookChannel implements Channel {
@@ -318,6 +320,7 @@ export class WebhookChannel implements Channel {
         layout: imagesCfg.layout ?? "grid",
         maxColumns: imagesCfg.max_columns ?? 3,
       });
+      ctx.debug(`stitched: inputs=${buffers.length} output=${stitched.length}B (${(stitched.length/1024/1024).toFixed(2)}MB)`);
       const item = await ctx.uploadImage(stitched);
       await ctx.notifyMedia([item]);
 

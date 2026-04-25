@@ -13,9 +13,8 @@ npm run dev              # TUI mode (default --tui): interactive terminal
 npm run build            # Compile TypeScript to dist/
 npm start                # Daemon mode: logs to stdout (systemd)
 npm run dev -- --logout  # Clear saved credentials and re-login
+npm test                 # Run unit tests (node:test + tsx, files under tests/)
 ```
-
-No test framework is configured.
 
 ## Architecture
 
@@ -29,7 +28,9 @@ WxClient (iLink long-poll) → Gateway (router + event bus) → Channel[]
 
 - **`src/protocol/weixin.ts`** — iLink protocol: type definitions + HTTP functions. Enums: MessageType, MessageItemType, MessageState. Functions: fetchQRCode, pollQRStatus, getUpdates, sendTextMessage, extractTextFromMessage. Network retry built-in (5 attempts, 3s delay).
 
-- **`src/core/wx-client.ts`** — `WxClient` (EventEmitter). QR login + credential persistence (`data/credentials.json`, 0o600). Long-poll loop with exponential backoff. Auto-manages contextTokens for reply threading. Events: `message`, `ready`, `error`.
+- **`src/core/wx-client.ts`** — `WxClient` (EventEmitter). QR login + credential persistence (`data/credentials.json`, 0o600). Long-poll loop with exponential backoff. Delegates per-user `context_token` to `ContextTokenStore`. Events: `message`, `ready`, `error`.
+
+- **`src/core/context-token-store.ts`** — `ContextTokenStore`. Persists `context_token` per user to disk (default `~/.wechat-gateway/context_tokens.json`, 0o600). **Critical for proactive push**: iLink's `sendmessage` returns HTTP 200 + `{"ret":-2}` (silent drop) if context_token is missing/stale. Token never expires server-side; reuse indefinitely. Path is configurable via `wechat.context_tokens_path` in config.
 
 - **`src/core/gateway.ts`** — `Gateway` (EventEmitter). Command routing (`/cmd args`), default handler fallback, notifyUser auto-capture (persisted to `data/notify_user`). Creates ChannelContext per channel. Events: `log`, `debug`.
 
@@ -55,9 +56,9 @@ WxClient (iLink long-poll) → Gateway (router + event bus) → Channel[]
 
 | State | Storage | Scope |
 |---|---|---|
-| Login credentials | Disk: `data/credentials.json` | Persists across restarts |
-| Notify user | Disk: `data/notify_user` | Persists (auto-captured) |
-| Context tokens (reply threading) | In-memory Map | Lost on restart |
+| Login credentials | Disk: `data/credentials.json` (or `wechat.credentials_path`) | Persists across restarts |
+| Notify user | Disk: `data/notify_user` (next to credentials) | Persists (auto-captured) |
+| Context tokens (per-user push anchor) | Disk: `~/.wechat-gateway/context_tokens.json` (or `wechat.context_tokens_path`) | Persists across restarts |
 | Long-poll buffer | In-memory | Refreshed each poll |
 | OpenClaw message queue | In-memory | Lost on restart |
 

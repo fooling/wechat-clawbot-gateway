@@ -29,14 +29,14 @@ async function main(): Promise<void> {
 
   // Handle --logout
   if (process.argv.includes("--logout")) {
-    const wx = new WxClient({ credentialsPath: config.wechat.credentials_path });
+    const wx = new WxClient({ credentialsPath: config.wechat.credentials_path, contextTokensPath: config.wechat.context_tokens_path });
     wx.clearCredentials();
     console.log("Credentials cleared. QR scan required on next start.");
     return;
   }
 
   // Create and login WxClient
-  const wx = new WxClient({ credentialsPath: config.wechat.credentials_path });
+  const wx = new WxClient({ credentialsPath: config.wechat.credentials_path, contextTokensPath: config.wechat.context_tokens_path });
   await wx.login();
 
   // Create Gateway

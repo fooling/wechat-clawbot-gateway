@@ -7,6 +7,7 @@ import { parse } from "yaml";
 
 export interface WechatConfig {
   credentials_path: string;
+  context_tokens_path: string;
   notify_user: string;
 }
 
@@ -119,6 +120,7 @@ export function loadConfig(configPath: string): GatewayConfig {
   return {
     wechat: {
       credentials_path: wechat.credentials_path ?? path.join(os.homedir(), ".wechat-gateway", "credentials.json"),
+      context_tokens_path: wechat.context_tokens_path ?? path.join(os.homedir(), ".wechat-gateway", "context_tokens.json"),
       notify_user: wechat.notify_user ?? "",
     },
     channels: (raw.channels ?? {}) as GatewayConfig["channels"],

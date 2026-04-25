@@ -6,6 +6,7 @@
     "dev": "tsx src/index.ts --tui",
     "build": "tsc",
     "start": "node dist/index.js",
+    "test": "node --import tsx --test tests/**/*.test.ts",
     "setup-service": "bash deploy/setup-service.sh"
   },
   "engines": {

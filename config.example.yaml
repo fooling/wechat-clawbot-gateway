@@ -1,6 +1,8 @@
 wechat:
   # Default: ~/.wechat-gateway/credentials.json
   # credentials_path: ~/.wechat-gateway/credentials.json
+  # Default: ~/.wechat-gateway/context_tokens.json (per-user iLink session anchor; required for proactive push)
+  # context_tokens_path: ~/.wechat-gateway/context_tokens.json
   # Leave empty to auto-capture first message sender
   notify_user: ""
 
