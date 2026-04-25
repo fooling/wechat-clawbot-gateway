@@ -29,14 +29,24 @@ async function main(): Promise<void> {
 
   // Handle --logout
   if (process.argv.includes("--logout")) {
-    const wx = new WxClient({ credentialsPath: config.wechat.credentials_path, contextTokensPath: config.wechat.context_tokens_path });
+    const wx = new WxClient({
+      credentialsPath: config.wechat.credentials_path,
+      contextTokensPath: config.wechat.context_tokens_path,
+      failedMessagesPath: config.wechat.failed_messages_path,
+      failedMessagesEnabled: config.wechat.failed_messages_enabled,
+    });
     wx.clearCredentials();
     console.log("Credentials cleared. QR scan required on next start.");
     return;
   }
 
   // Create and login WxClient
-  const wx = new WxClient({ credentialsPath: config.wechat.credentials_path, contextTokensPath: config.wechat.context_tokens_path });
+  const wx = new WxClient({
+      credentialsPath: config.wechat.credentials_path,
+      contextTokensPath: config.wechat.context_tokens_path,
+      failedMessagesPath: config.wechat.failed_messages_path,
+      failedMessagesEnabled: config.wechat.failed_messages_enabled,
+    });
   await wx.login();
 
   // Create Gateway

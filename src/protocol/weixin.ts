@@ -11,6 +11,13 @@ const QR_POLL_TIMEOUT_MS = 35_000;
 const CDN_DOWNLOAD = "https://novac2c.cdn.weixin.qq.com/c2c/download";
 const CDN_UPLOAD = "https://novac2c.cdn.weixin.qq.com/c2c/upload";
 
+// 直接抄官方 @tencent-weixin/openclaw-weixin 当前版本，让请求和官方客户端无法
+// 区分。bump 时同步两个常量：channel_version 是字符串、ClientVersion 是
+// (major<<16)|(minor<<8)|patch 的紧凑 int。
+// 2.1.10 (2026-04-24) → 131338
+const ILINK_CHANNEL_VERSION = "2.1.10";
+const ILINK_APP_CLIENT_VERSION = 131338;
+
 // ── Type Definitions ───────────────────────────────────────
 
 export const MessageType = {
@@ -195,6 +202,8 @@ function buildHeaders(token?: string): Record<string, string> {
     "Content-Type": "application/json",
     AuthorizationType: "ilink_bot_token",
     "X-WECHAT-UIN": randomWechatUin(),
+    "iLink-App-Id": "bot",
+    "iLink-App-ClientVersion": String(ILINK_APP_CLIENT_VERSION),
   };
   if (token) {
     headers.Authorization = `Bearer ${token}`;
@@ -211,7 +220,10 @@ function apiPost<T>(
 ): Promise<T> {
   return withRetry(async () => {
     const url = new URL(endpoint, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
-    const bodyStr = JSON.stringify(body);
+    const wrappedBody = endpoint.startsWith("ilink/bot/") && body.base_info === undefined
+      ? { ...body, base_info: { channel_version: ILINK_CHANNEL_VERSION } }
+      : body;
+    const bodyStr = JSON.stringify(wrappedBody);
     const headers = buildHeaders(token);
     headers["Content-Length"] = String(Buffer.byteLength(bodyStr, "utf-8"));
 
@@ -329,20 +341,26 @@ export async function getUpdates(
   }
 }
 
+export interface SendResult {
+  ret: number;          // 0 = success; non-zero (常见 -2) = 业务失败，body 已被 console.error
+  errcode?: number;
+  errmsg?: string;
+}
+
 export async function sendMessage(
   baseUrl: string,
   token: string,
   to: string,
   items: MessageItem[],
   contextToken?: string,
-): Promise<void> {
+): Promise<SendResult> {
   // Filter unsupported types (VOICE/VIDEO silently ignored by WeChat)
   const sanitized = items.filter(item => {
     if (!item.type || SENDABLE_ITEM_TYPES.has(item.type)) return true;
     console.error(`[wx] sendMessage: item type ${item.type} not supported by bot API, dropped`);
     return false;
   });
-  if (!sanitized.length) return;
+  if (!sanitized.length) return { ret: 0 };
 
   const clientId = `bot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const resp = await apiPost<{ ret?: number; errcode?: number; errmsg?: string; [k: string]: unknown }>(
@@ -363,11 +381,12 @@ export async function sendMessage(
   );
   // iLink 业务错误返回 HTTP 200 但 body 里 ret != 0；最常见 ret=-2（context_token 缺失/失效）
   // 见 src/core/context-token-store.ts 注释
-  const ret = typeof resp?.ret === "number" ? resp.ret : undefined;
-  if (ret !== undefined && ret !== 0) {
+  const ret = typeof resp?.ret === "number" ? resp.ret : 0;
+  if (ret !== 0) {
     const types = sanitized.map(i => i.type).join(",");
     console.error(`[wx] sendMessage to=${to} types=[${types}] ret=${ret} errcode=${resp?.errcode ?? ""} errmsg=${resp?.errmsg ?? ""} body=${JSON.stringify(resp)}`);
   }
+  return { ret, errcode: resp?.errcode, errmsg: resp?.errmsg };
 }
 
 export async function sendTextMessage(
@@ -376,11 +395,11 @@ export async function sendTextMessage(
   to: string,
   text: string,
   contextToken?: string,
-): Promise<void> {
+): Promise<SendResult> {
   const items: MessageItem[] = text
     ? [{ type: MessageItemType.TEXT, text_item: { text } }]
     : [];
-  await sendMessage(baseUrl, token, to, items, contextToken);
+  return sendMessage(baseUrl, token, to, items, contextToken);
 }
 
 // ── Session Health ─────────────────────────────────────
@@ -390,6 +409,23 @@ export async function checkSession(
   token: string,
 ): Promise<{ ret?: number; errcode?: number; errmsg?: string }> {
   return apiPost(baseUrl, "ilink/bot/getconfig", {}, token);
+}
+
+// 官方 SDK @tencent-weixin/openclaw-weixin v2.1.10 (2026-04-24) 新增：
+// 启动时声明 channel 处于 active-receive 状态、退出时反向通知。怀疑 ret=-2
+// 静默丢消息的 5h+ 衰减窗口就是缺这个 liveness 信号导致的。
+export async function notifyStart(
+  baseUrl: string,
+  token: string,
+): Promise<{ ret?: number; errcode?: number; errmsg?: string }> {
+  return apiPost(baseUrl, "ilink/bot/msg/notifystart", {}, token);
+}
+
+export async function notifyStop(
+  baseUrl: string,
+  token: string,
+): Promise<{ ret?: number; errcode?: number; errmsg?: string }> {
+  return apiPost(baseUrl, "ilink/bot/msg/notifystop", {}, token);
 }
 
 // ── Message Parsing ────────────────────────────────────────

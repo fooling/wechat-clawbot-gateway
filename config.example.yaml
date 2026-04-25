@@ -6,6 +6,13 @@ wechat:
   # Leave empty to auto-capture first message sender
   notify_user: ""
 
+  # Failed-message recovery (opt-in)
+  # 当 sendMessage 业务返回 ret != 0（典型 -2 静默丢消息）时，把整条消息序列化到目录，
+  # 等下一次该用户发来 IN 消息（context_token 刷新后）自动批量回放。
+  # 启用前提：能容忍消息晚到 + 用户终归会主动发消息触发回放。
+  failed_messages_enabled: false
+  # failed_messages_path: ~/.wechat-gateway/failed_messages
+
 channels:
   webhook:
     enabled: false

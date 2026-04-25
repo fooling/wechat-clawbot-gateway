@@ -18,6 +18,7 @@
 - **IFTTT 双向自动化** — 微信触发 IFTTT Applet / IFTTT 推送到微信
 - **OpenClaw 服务端** — 暴露 iLink 兼容接口，让外部 Agent 接入微信
 - **扫码即用** — 凭证持久化，重启无需重新扫码
+- **失败消息恢复（可选）** — 主动推送 ret=-2 等业务失败时持久化入队，用户下次发消息后自动回放
 
 ## 快速开始
 
@@ -43,7 +44,11 @@ npm run dev -- --logout  # 清除凭证重新登录
 wechat:
   # 默认: ~/.wechat-gateway/credentials.json
   # credentials_path: ~/.wechat-gateway/credentials.json
-  notify_user: ""          # 留空自动捕获首条消息发送者
+  # 默认: ~/.wechat-gateway/context_tokens.json（per-user iLink 推送锚点，主动推送必需）
+  # context_tokens_path: ~/.wechat-gateway/context_tokens.json
+  notify_user: ""                      # 留空自动捕获首条消息发送者
+  failed_messages_enabled: false       # 主动推送 ret=-2 时入队，下次该用户发消息后回放
+  # failed_messages_path: ~/.wechat-gateway/failed_messages
 
 channels:
   webhook:
@@ -88,6 +93,15 @@ channels:
 
 API Key 放在 `.env` 文件中（参考 `.env.example`）。
 配置文件查找顺序：`./config.yaml` → `/etc/wechat-gateway/config.yaml`。
+
+### 失败消息恢复（可选）
+
+iLink 主动推送的 `sendmessage` 在 token 失效或服务端校验未通过时会返回 HTTP 200 + `{"ret":-2}` **静默丢消息**。开启 `failed_messages_enabled: true` 后：
+
+- 任何 ret != 0 的发送失败会把整条消息（包括 image/file 的 CDN 引用）序列化到 `failed_messages_path` 目录，文件名 `{timestamp}-{userId}-{rand}.json`。
+- 下一次该用户发来 IN 消息（`context_token` 自动刷新）时，立即按时间戳顺序回放队列；任一条仍失败则停止本轮、保留文件、累加 `attempts`，等下一次 IN 触发再试。
+- 队列与 `~/.wechat-gateway/context_tokens.json` 共用同一目录、各自独立文件，对内容不会互相污染。
+- 默认关闭。已知局限：图片/文件依赖远端 CDN TTL，长期堆积可能在回放时拿到 CDN 失效错误——必要时手工清理 `failed_messages_path` 即可。
 
 ## 架构
 
@@ -487,8 +501,10 @@ src/
 ├── index.ts                 # 入口
 ├── config.ts                # YAML 配置加载
 ├── core/
-│   ├── gateway.ts           # 事件总线 + 命令路由 + Channel 生命周期
-│   └── wx-client.ts         # 微信连接（QR登录 + long-poll + 发消息）
+│   ├── gateway.ts                # 事件总线 + 命令路由 + Channel 生命周期
+│   ├── wx-client.ts              # 微信连接（QR登录 + long-poll + 发消息）
+│   ├── context-token-store.ts    # 每用户 iLink context_token 持久化
+│   └── failed-message-store.ts   # 失败消息持久化队列 + 回放（可选）
 ├── protocol/
 │   └── weixin.ts            # iLink 协议（类型 + HTTP 函数）
 └── channels/

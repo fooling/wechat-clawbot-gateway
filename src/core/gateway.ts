@@ -60,7 +60,7 @@ export class Gateway extends EventEmitter {
         this.emitDebug(channel.name, `stop error: ${err}`);
       }
     }
-    this.wxClient.stop();
+    await this.wxClient.stop();
   }
 
   // ── Internal ───────────────────────────────────────────

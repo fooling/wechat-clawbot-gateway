@@ -6,12 +6,13 @@ import {
   fetchQRCode,
   pollQRStatus,
   getUpdates,
-  sendTextMessage,
   sendMessage,
   extractMessageSummary,
   downloadMedia as cdnDownload,
   uploadMedia as cdnUpload,
   checkSession,
+  notifyStart,
+  notifyStop,
   MessageType,
   MessageItemType,
   UploadMediaType,
@@ -24,6 +25,7 @@ import type {
   CDNMedia,
 } from "../protocol/weixin.js";
 import { ContextTokenStore } from "./context-token-store.js";
+import { FailedMessageStore } from "./failed-message-store.js";
 
 const MAX_QR_REFRESH = 3;
 const LOGIN_DEADLINE_MS = 8 * 60_000;
@@ -51,6 +53,8 @@ export interface SessionMetrics {
 export interface WxClientOptions {
   credentialsPath: string;
   contextTokensPath: string;
+  failedMessagesPath: string;
+  failedMessagesEnabled: boolean;
 }
 
 export class WxClient extends EventEmitter {
@@ -58,6 +62,8 @@ export class WxClient extends EventEmitter {
   private running = false;
   private getUpdatesBuf = "";
   private readonly contextTokens: ContextTokenStore;
+  private readonly failedMessages: FailedMessageStore;
+  private readonly flushingUsers = new Set<string>();
   private credentialsPath: string;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private metrics: SessionMetrics = {
@@ -72,8 +78,12 @@ export class WxClient extends EventEmitter {
     super();
     this.credentialsPath = path.resolve(options.credentialsPath);
     this.contextTokens = new ContextTokenStore(options.contextTokensPath);
+    this.failedMessages = new FailedMessageStore(options.failedMessagesPath, options.failedMessagesEnabled);
     if (this.contextTokens.size > 0) {
       console.log(`[wx] Loaded ${this.contextTokens.size} context_token(s) from ${this.contextTokens.path}`);
+    }
+    if (this.failedMessages.enabled) {
+      console.log(`[wx] Failed-message recovery enabled, dir=${this.failedMessages.path}`);
     }
   }
 
@@ -141,6 +151,18 @@ export class WxClient extends EventEmitter {
 
   startPolling(): void {
     this.running = true;
+    // 对齐官方 SDK：声明本 channel 进入 active-receive 状态。失败仅记日志，
+    // 长轮询本身也会隐式维持 liveness，不阻断启动。
+    if (this.credentials) {
+      const { baseUrl, token } = this.credentials;
+      notifyStart(baseUrl, token)
+        .then((resp) => {
+          if (resp.ret !== undefined && resp.ret !== 0) {
+            console.error(`[wx] notifyStart ret=${resp.ret} errcode=${resp.errcode} errmsg=${resp.errmsg}`);
+          }
+        })
+        .catch((err) => console.error(`[wx] notifyStart error: ${err}`));
+    }
     this.pollLoop().catch((err) => {
       this.emit("error", err);
     });
@@ -149,28 +171,27 @@ export class WxClient extends EventEmitter {
 
   async send(userId: string, text: string): Promise<void> {
     if (!this.credentials) throw new Error("Not logged in");
-    const contextToken = this.contextTokens.get(userId);
-    if (!contextToken) console.warn(`[wx] send to ${userId} WITHOUT context_token (push will likely silently fail with ret=-2)`);
-    await sendTextMessage(
-      this.credentials.baseUrl,
-      this.credentials.token,
-      userId,
-      text,
-      contextToken,
-    );
+    const items: MessageItem[] = text
+      ? [{ type: MessageItemType.TEXT, text_item: { text } }]
+      : [];
+    if (!items.length) return;
+    await this.sendMedia(userId, items);
   }
 
   async sendMedia(userId: string, items: MessageItem[]): Promise<void> {
     if (!this.credentials) throw new Error("Not logged in");
     const contextToken = this.contextTokens.get(userId);
     if (!contextToken) console.warn(`[wx] sendMedia to ${userId} WITHOUT context_token (push will likely silently fail with ret=-2)`);
-    await sendMessage(
+    const result = await sendMessage(
       this.credentials.baseUrl,
       this.credentials.token,
       userId,
       items,
       contextToken,
     );
+    if (result.ret !== 0) {
+      this.failedMessages.enqueue(userId, items, { ret: result.ret, errcode: result.errcode, errmsg: result.errmsg });
+    }
   }
 
   async downloadMedia(cdnMedia: CDNMedia): Promise<Buffer> {
@@ -195,11 +216,18 @@ export class WxClient extends EventEmitter {
     };
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.running = false;
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+    if (this.credentials) {
+      try {
+        await notifyStop(this.credentials.baseUrl, this.credentials.token);
+      } catch (err) {
+        console.error(`[wx] notifyStop error: ${err}`);
+      }
     }
   }
 
@@ -312,20 +340,54 @@ export class WxClient extends EventEmitter {
   }
 
   private processMessage(msg: WeixinMessage): void {
-    if (msg.message_type !== MessageType.USER) return;
-
     const fromUser = msg.from_user_id;
-    if (!fromUser) return;
-
-    if (msg.context_token) {
-      this.contextTokens.set(fromUser, msg.context_token);
+    if (fromUser && msg.context_token) {
+      const updated = this.contextTokens.set(fromUser, msg.context_token);
+      if (updated && this.failedMessages.enabled) {
+        // token 刚被刷新，是回放失败队列的最佳时机；fire-and-forget，错误内吞
+        this.flushPendingFor(fromUser).catch(err => console.error(`[wx] flushPending(${fromUser}): ${err}`));
+      }
     }
+
+    if (msg.message_type !== MessageType.USER) return;
+    if (!fromUser) return;
 
     const { text, mediaType } = extractMessageSummary(msg);
     if (!text.trim()) return;
 
     const incoming: IncomingMessage = { userId: fromUser, text, mediaType, raw: msg };
     this.emit("message", incoming);
+  }
+
+  private async flushPendingFor(userId: string): Promise<void> {
+    if (this.flushingUsers.has(userId)) return;
+    if (!this.credentials) return;
+    const pending = this.failedMessages.pendingFor(userId);
+    if (pending.length === 0) return;
+    this.flushingUsers.add(userId);
+    try {
+      const { baseUrl, token } = this.credentials;
+      const ctxToken = this.contextTokens.get(userId);
+      console.log(`[wx] Replaying ${pending.length} pending message(s) for ${userId}`);
+      for (const rec of pending) {
+        try {
+          const result = await sendMessage(baseUrl, token, userId, rec.items, ctxToken);
+          if (result.ret === 0) {
+            this.failedMessages.remove(rec.filename);
+          } else {
+            // 仍然失败：保留文件、累加 attempts，并停止本轮回放（避免拉爆）
+            this.failedMessages.bumpAttempt(rec, { ret: result.ret, errcode: result.errcode, errmsg: result.errmsg });
+            console.error(`[wx] Replay still failing for ${rec.filename} ret=${result.ret}; stopping this round`);
+            break;
+          }
+        } catch (err) {
+          console.error(`[wx] Replay error on ${rec.filename}: ${err}`);
+          break;
+        }
+      }
+    } finally {
+      this.flushingUsers.delete(userId);
+    }
   }
 
   private displayQRCode(qrcodeUrl: string): void {
